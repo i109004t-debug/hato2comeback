@@ -16,6 +16,7 @@ export function sendingConfigHash(settings) {
 }
 
 export function pauseReason(code) {
+  if (['AUTH_CHECK_STALE', 'LOCK_WAIT_TIMEOUT'].includes(code)) return code;
   if (['AUTH_CHECK_FAILED', 'SUPPRESSION_MISCONFIGURED', 'CONFIGURATION_INVALID', 'DELIVERY_CHECK_REQUIRED'].includes(code)) return 'AUTH_CHECK';
   if (['MONITORING_UNAVAILABLE', 'EVENT_DESTINATION_DISABLED'].includes(code)) return 'MONITORING_UNAVAILABLE';
   if (code === 'QUOTA_INSUFFICIENT') return 'QUOTA';
@@ -68,14 +69,16 @@ export function createPrecheck(deps) {
         assertHealthy(['BOUNCE', 'COMPLAINT'].every((reason) => account.SuppressionAttributes?.SuppressedReasons?.includes(reason)), 'SUPPRESSION_MISCONFIGURED');
         assertHealthy(identity?.VerifiedForSendingStatus === true && identity.DkimAttributes?.SigningEnabled === true && identity.DkimAttributes.Status === 'SUCCESS' && identity.DkimAttributes.CurrentSigningKeyLength === 'RSA_2048_BIT', 'AUTH_CHECK_FAILED');
         assertHealthy(identity.MailFromAttributes?.MailFromDomain === `bounce.${deps.senderDomain}` && identity.MailFromAttributes.MailFromDomainStatus === 'SUCCESS' && identity.MailFromAttributes.BehaviorOnMxFailure === 'REJECT_MESSAGE', 'AUTH_CHECK_FAILED');
-        assertHealthy(configuration?.SendingOptions?.SendingEnabled === true && configuration.DeliveryOptions?.TlsPolicy === 'REQUIRE' && configuration.ReputationOptions?.ReputationMetricsEnabled === true && configuration.SuppressionOptions === undefined, 'CONFIGURATION_INVALID');
+        const suppressedReasons = configuration?.SuppressionOptions?.SuppressedReasons;
+        assertHealthy(configuration?.SendingOptions?.SendingEnabled === true && configuration.DeliveryOptions?.TlsPolicy === 'REQUIRE' && configuration.ReputationOptions?.ReputationMetricsEnabled === true && (suppressedReasons === undefined || Array.isArray(suppressedReasons) && ['BOUNCE', 'COMPLAINT'].every((reason) => suppressedReasons.includes(reason))), 'CONFIGURATION_INVALID');
         const enabled = Array.isArray(destinations?.EventDestinations) ? destinations.EventDestinations.filter((entry) => entry.Enabled === true && REQUIRED_EVENTS.every((event) => entry.MatchingEventTypes?.includes(event))) : [];
         const dimensions = (entry) => entry.CloudWatchDestination?.DimensionConfigurations;
         assertHealthy(enabled.some((entry) => dimensions(entry)?.length === 1 && dimensions(entry)[0].DimensionName === 'campaign' && dimensions(entry)[0].DimensionValueSource === 'MESSAGE_TAG' && dimensions(entry)[0].DefaultDimensionValue === 'none'), 'EVENT_DESTINATION_DISABLED');
         const streamPrefix = `arn:aws:firehose:${deps.region}:${deps.accountId}:deliverystream/`;
         assertHealthy(deps.eventStreamArn?.startsWith(streamPrefix) && enabled.some((entry) => entry.KinesisFirehoseDestination?.DeliveryStreamArn === deps.eventStreamArn && entry.KinesisFirehoseDestination.IamRoleArn?.startsWith(`arn:aws:iam::${deps.accountId}:role/`)), 'EVENT_DESTINATION_DISABLED');
         const auth = await store.get('SETTINGS', 'AUTH_STATUS');
-        assertHealthy(auth?.status === 'PASS' && auth.domain === deps.senderDomain && auth.config_hash === configHash && /^[a-f0-9]{64}$/.test(auth.dns_config_hash ?? '') && now() - Date.parse(auth.checked_at) >= 0 && now() - Date.parse(auth.checked_at) <= config.auth_status_max_age_hours * 3600000, 'AUTH_CHECK_FAILED');
+        assertHealthy(auth && auth.config_hash === configHash, auth ? 'AUTH_CHECK_STALE' : 'AUTH_CHECK_FAILED');
+        assertHealthy(auth.status === 'PASS' && auth.domain === deps.senderDomain && /^[a-f0-9]{64}$/.test(auth.dns_config_hash ?? '') && now() - Date.parse(auth.checked_at) >= 0 && now() - Date.parse(auth.checked_at) <= config.auth_status_max_age_hours * 3600000, 'AUTH_CHECK_FAILED');
         const delivery = org.delivery_check;
         const deliveryValid = delivery?.status === 'PASS' && typeof delivery.note === 'string' && delivery.note.trim().length > 0 && delivery.config_hash === configHash && delivery.dns_config_hash === auth.dns_config_hash && now() - Date.parse(delivery.passed_at) >= 0 && now() - Date.parse(delivery.passed_at) <= config.delivery_check_max_age_days * 86400000 && DELIVERY_CASES.every((id) => delivery.cases?.[id] === 'PASS');
         const exempt = options.test === true && (delivery === undefined || options.acceptanceRecovery === true);
@@ -85,12 +88,12 @@ export function createPrecheck(deps) {
           try { await deps.s3.headObject({ Bucket: deps.dataBucket, Key: delivery.evidence_key }); } catch { assertHealthy(false, 'DELIVERY_CHECK_REQUIRED'); }
         }
         const quota = account.SendQuota;
-        assertHealthy(Number.isFinite(quota?.Max24HourSend) && Number.isFinite(quota.SentLast24Hours) && quota.Max24HourSend >= 0 && quota.SentLast24Hours >= 0 && Number.isFinite(quota.MaxSendRate) && quota.MaxSendRate > 0, 'QUOTA_INSUFFICIENT');
+        assertHealthy(Number.isFinite(quota?.Max24HourSend) && Number.isFinite(quota.SentLast24Hours) && (quota.Max24HourSend === -1 || quota.Max24HourSend >= 0) && quota.SentLast24Hours >= 0 && Number.isFinite(quota.MaxSendRate) && quota.MaxSendRate > 0, 'QUOTA_INSUFFICIENT');
         const daily = await store.get('DAILY', jstDate(now()));
         assertHealthy(!daily || Number.isSafeInteger(daily.reserved_attempts) && daily.reserved_attempts >= 0, 'QUOTA_INSUFFICIENT');
         const remaining = options.remaining ?? options.campaign?.recipients_total ?? config.daily_send_cap;
         const required = Math.min(remaining, Math.max(0, config.daily_send_cap - (daily?.reserved_attempts ?? 0)));
-        const quotaRemaining = Math.max(0, quota.Max24HourSend - quota.SentLast24Hours - cache.used);
+        const quotaRemaining = quota.Max24HourSend === -1 ? Infinity : Math.max(0, quota.Max24HourSend - quota.SentLast24Hours - cache.used);
         const warnings = [];
         if (quotaRemaining < required) {
           if (options.scheduling) warnings.push('QUOTA_INSUFFICIENT');

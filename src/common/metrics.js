@@ -8,7 +8,7 @@ export const METRIC_UNITS = Object.freeze({
   ApiError4xx: 'Count', ApiError5xx: 'Count', ApiLatencyMs: 'Milliseconds',
   SesSendingEnabled: 'None', SesMax24HourSend: 'Count', SesSentLast24Hours: 'Count', SesMaxSendRate: 'Count/Second',
 });
-const reasons = ['USER', 'OPERATOR_SWITCH', 'REPUTATION_ALARM', 'CAMPAIGN_BOUNCE', 'CAMPAIGN_DELAY', 'EVENTS_MISSING', 'EVENT_LOG_STALE', 'MONITORING_UNAVAILABLE', 'CONTENT_ERROR', 'AUTH_CHECK', 'SES_PAUSED', 'SES_UNSTABLE', 'QUOTA'];
+const reasons = ['USER', 'OPERATOR_SWITCH', 'REPUTATION_ALARM', 'CAMPAIGN_BOUNCE', 'CAMPAIGN_DELAY', 'EVENTS_MISSING', 'EVENT_LOG_STALE', 'MONITORING_UNAVAILABLE', 'CONTENT_ERROR', 'AUTH_CHECK', 'AUTH_CHECK_STALE', 'LOCK_WAIT_TIMEOUT', 'SES_PAUSED', 'SES_UNSTABLE', 'QUOTA'];
 
 export function createMetrics({ env, now = defaultNow, write = (line) => process.stdout.write(line) }) {
   if (!['dev', 'stg', 'prod'].includes(env)) throw new TypeError('Invalid environment');

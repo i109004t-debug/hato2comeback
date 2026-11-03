@@ -1,10 +1,19 @@
 import { createSender, buildSendInput } from '../../common/sender.js';
 import { pauseReason } from '../../common/precheck.js';
-import { change, currentAction, flush, output, pause, readChunk } from '../state.js';
+import { change, currentAction, flush, output, pause, readChunk, boundedWait, workflowStep } from '../state.js';
+import { prepare } from './prepare.js';
 
 export async function send(event, runtime, context) {
   const { campaign_id: id, execution_arn: executionArn } = event;
   let campaign = await runtime.store.get('CAMPAIGN', id);
+  if (campaign?.execution_arn === executionArn && campaign.status === 'QUEUED' && campaign.pause_phase === 'prepare') return prepare(event, runtime);
+  if (campaign?.execution_arn === executionArn && ['SENDING', 'PAUSED'].includes(campaign.status)) {
+    const budget = await workflowStep(runtime, id, executionArn, 'send');
+    if (budget) {
+      if (budget.action === 'PAUSED') await runtime.lock.release(id);
+      return budget;
+    }
+  }
   const stopped = currentAction(campaign, executionArn);
   if (stopped) {
     if (campaign?.execution_arn === executionArn) await runtime.lock.release(id);
@@ -21,7 +30,10 @@ export async function send(event, runtime, context) {
   const health = await runtime.precheck.run({ campaign, allowedStatuses: ['SENDING'], force: true, checkRatios: campaign.progress.chunk % 5 === 0, recent: true, remaining: 1 });
   if (!health.ok) return pause(runtime, id, executionArn, pauseReason(health.code), health.code);
   const held = await runtime.lock.acquire(id, config.lock_ttl_seconds);
-  if (!held) return output('WAIT_LOCK', { phase: 'send' });
+  if (!held) return boundedWait(runtime, id, executionArn, 'WAIT_LOCK', 'send');
+  campaign = await change(runtime, id, executionArn, ['SENDING'], { wait_lock_run: 0 });
+  const stoppedAfterLock = currentAction(campaign, executionArn);
+  if (stoppedAfterLock) { await runtime.lock.release(id); return stoppedAfterLock; }
   const lines = await readChunk(runtime, campaign);
   let i = campaign.progress.index;
   if (!Number.isSafeInteger(i) || i < 0 || i > lines.length) return output('REVIEW', { reason: 'INVALID_PROGRESS' });
@@ -46,7 +58,7 @@ export async function send(event, runtime, context) {
       await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: key, ContentType: 'application/x-ndjson', Body: results.map((item) => JSON.stringify(item)).join('\n') + '\n' });
       extra.result_keys = [...new Set([...(campaign.result_keys ?? []), key])];
     }
-    campaign = await flush(runtime, id, executionArn, { chunk: nextChunk, index }, pending, limiter, lastSendAt, { ...extra, sender_state: sender.getState() });
+    campaign = await flush(runtime, id, executionArn, { chunk: nextChunk, index }, pending, limiter, lastSendAt, { ...extra, ...(i > start ? { throttled_run: 0 } : {}), sender_state: sender.getState() });
     return currentAction(campaign, executionArn);
   };
   const release = async (action) => {
@@ -78,7 +90,7 @@ export async function send(event, runtime, context) {
       if (latest) return release(latest);
       if (result.type === 'PAUSE') return pause(runtime, id, executionArn, result.reason, result.code, limiter);
       if (result.type === 'WAIT_DAY') return release(output('WAIT_DAY', { wait_seconds: result.wait_seconds, next_attempt_at: result.next_attempt_at }));
-      if (result.type === 'THROTTLED') return output('THROTTLED');
+      if (result.type === 'THROTTLED') return boundedWait(runtime, id, executionArn, 'THROTTLED', 'send', limiter);
       if (result.type === 'YIELD') return output('SEND');
       if (result.type === 'QUOTA' || result.type === 'SES_PAUSED') return pause(runtime, id, executionArn, result.type, result.code, limiter);
       if (result.type === 'EXPIRED') {

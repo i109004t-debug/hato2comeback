@@ -26,6 +26,12 @@ async function update(ctx) {
   await updateRecord(runtime, 'SETTINGS', 'ORG', org, { ...body, updated_by: user.sub });
   runtime.precheck.invalidate();
   if (body.approval_required === false && org?.approval_required !== false) await audit('APPROVAL_DISABLED', 'ORG');
+  try {
+    const response = await runtime.lambda.invoke({ FunctionName: runtime.workerFunctionArn, InvocationType: 'Event', Payload: Buffer.from(JSON.stringify({ mode: 'auth-check' })) });
+    if (response.StatusCode !== 202) throw new Error('Authentication check was not accepted');
+  } catch {
+    throw new AppError('AUTH_CHECK_STALE', 503, '設定は保存しましたが、送信元の再確認を開始できませんでした。管理者に確認してください。');
+  }
   return get(ctx);
 }
 

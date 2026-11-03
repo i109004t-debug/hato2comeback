@@ -60,12 +60,12 @@ test('5.4.8 SES形式: JSONのエスケープと全トピックのOPT_IN/OPT_OUT
   const csv = `${header}\nmember@example.jp,"山田,""太郎""",2026-10-01T00:00:00Z,入会,,kaiho`;
   const result = validateImportCsv(csv, options);
   const output = writeSesImport(result.rows, options.topics);
-  assert.match(output, /""v"":1/);
-  const parsed = parseCsv(output);
-  assert.deepEqual(parsed[0], ['emailAddress', 'unsubscribeAll', 'attributesData', 'topicPreferences.kaiho', 'topicPreferences.event']);
-  assert.deepEqual(parsed[1].slice(3), ['OPT_IN', 'OPT_OUT']);
-  assert.equal(parsed[1][1], 'false');
-  assert.deepEqual(JSON.parse(parsed[1][2]), result.rows[0].attributes);
+  const parsed = output.trimEnd().split('\n').map(JSON.parse);
+  assert.equal(parsed.length, 1);
+  assert.deepEqual(parsed[0].topicPreferences, [{ topicName: 'kaiho', subscriptionStatus: 'OPT_IN' }, { topicName: 'event', subscriptionStatus: 'OPT_OUT' }]);
+  assert.equal(parsed[0].unsubscribeAll, false);
+  assert.equal(parsed[0].emailAddress, 'member@example.jp');
+  assert.deepEqual(JSON.parse(parsed[0].attributesData), result.rows[0].attributes);
   assert.throws(() => writeSesImport([{ ...result.rows[0], topics: ['unknown'] }], options.topics));
 });
 

@@ -12,6 +12,7 @@ import { addressHash } from '../../common/log.js';
 import { AppError } from '../../common/http.js';
 import { ensureContactMetadata, applyContactMetadata } from '../../common/contact-metadata.js';
 import { marshall, unmarshall } from '../../common/ddb.js';
+import { normalizeEmail } from '../../common/email.js';
 
 function safeSesSpf(record) {
   const terms = record.toLowerCase().split(/\s+/).slice(1);
@@ -77,7 +78,7 @@ export async function checkDns(runtime, identity) {
   };
 }
 
-async function authentication(runtime) {
+export async function authentication(runtime) {
   const org = await runtime.store.get('SETTINGS', 'ORG');
   const previous = await runtime.store.get('SETTINGS', 'AUTH_STATUS');
   let identity;
@@ -100,6 +101,7 @@ async function authentication(runtime) {
     await runtime.notify('DELIVERY_CHECK_REQUIRED', 'daily');
   }
   runtime.precheck.invalidate();
+  return { status: result.status };
 }
 
 async function backup(runtime) {
@@ -115,7 +117,7 @@ async function backup(runtime) {
       // 属性はSESの1ページ分だけ保持し、全会員分のMapを作らない。
       const metadata = new Map();
       const erased = new Set();
-      const hashes = [...new Set(contacts.map((contact) => addressHash(contact.EmailAddress, hmacKey)))];
+      const hashes = [...new Set(contacts.map((contact) => addressHash(normalizeEmail(contact.EmailAddress).email, hmacKey)))];
       for (let offset = 0; offset < hashes.length; offset += 50) {
         const keys = hashes.slice(offset, offset + 50).flatMap((SK) => ['CONTACT_META', 'ERASED'].map((PK) => marshall({ PK, SK })));
         const response = await runtime.ddb.batchGetItem({ RequestItems: { [runtime.tableName]: { Keys: keys, ConsistentRead: true } } });
@@ -127,8 +129,14 @@ async function backup(runtime) {
         }
       }
       for (const contact of contacts) {
-        const hash = addressHash(contact.EmailAddress, hmacKey);
-        if (erased.has(hash)) continue;
+        const hash = addressHash(normalizeEmail(contact.EmailAddress).email, hmacKey);
+        if (erased.has(hash)) {
+          // 送信確認後の完全削除とSESの自動登録が競合した場合も、宛先は保存しない。
+          try { await runtime.ses.deleteContact({ ContactListName: runtime.contactList, EmailAddress: contact.EmailAddress }); } catch (error) {
+            if (error.name !== 'NotFoundException') throw error;
+          }
+          continue;
+        }
         let saved = metadata.get(hash);
         if (!saved && backfilled < 100) {
           backfilled += 1;
@@ -174,6 +182,7 @@ async function account(runtime) {
   runtime.metrics.emit('SesSendingEnabled', healthy ? 1 : 0);
   for (const [key, name] of [['Max24HourSend', 'SesMax24HourSend'], ['SentLast24Hours', 'SesSentLast24Hours'], ['MaxSendRate', 'SesMaxSendRate']]) {
     if (!Number.isFinite(value.SendQuota?.[key])) throw new Error('Missing SES quota');
+    if (key === 'Max24HourSend' && value.SendQuota[key] === -1) continue;
     runtime.metrics.emit(name, value.SendQuota[key]);
   }
   if (!healthy) await runtime.notify('SES_PAUSED', 'daily');

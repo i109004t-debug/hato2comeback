@@ -20,7 +20,8 @@ export async function assertAcceptance(runtime, org, input) {
   const config = await runtime.config.get();
   const auth = await runtime.store.get('SETTINGS', 'AUTH_STATUS');
   const age = runtime.now() - Date.parse(auth?.checked_at);
-  assertHealthy(auth?.status === 'PASS' && auth.domain === runtime.senderDomain && age >= 0 && age <= config.auth_status_max_age_hours * 3600000 && auth.config_hash === currentConfigHash(runtime, org), 'AUTH_CHECK_FAILED');
+  assertHealthy(auth && auth.config_hash === currentConfigHash(runtime, org), auth ? 'AUTH_CHECK_STALE' : 'AUTH_CHECK_FAILED');
+  assertHealthy(auth.status === 'PASS' && auth.domain === runtime.senderDomain && age >= 0 && age <= config.auth_status_max_age_hours * 3600000, 'AUTH_CHECK_FAILED');
   assertHealthy(input.config_hash === auth.config_hash && input.dns_config_hash === auth.dns_config_hash && DELIVERY_CASES.every((id) => input.cases[id] === 'PASS'), 'DELIVERY_CHECK_REQUIRED');
   assertHealthy(/^delivery-checks\/[^/]+\/.+/.test(input.evidence_key) && !input.evidence_key.split('/').includes('..'), 'DELIVERY_CHECK_REQUIRED');
   try { await runtime.s3.headObject({ Bucket: runtime.dataBucket, Key: input.evidence_key }); } catch { assertHealthy(false, 'DELIVERY_CHECK_REQUIRED'); }

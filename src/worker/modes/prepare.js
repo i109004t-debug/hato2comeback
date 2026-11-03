@@ -1,6 +1,6 @@
 import { shuffleRecipients } from '../../common/shuffle.js';
 import { normalizeEmail } from '../../common/email.js';
-import { change, output, currentAction, readChunk } from '../state.js';
+import { change, output, currentAction, readChunk, boundedWait, workflowStep } from '../state.js';
 import { addressHash } from '../../common/log.js';
 import { applyContactMetadata } from '../../common/contact-metadata.js';
 
@@ -15,8 +15,13 @@ export async function prepare(event, runtime) {
   const previousExecution = campaign.execution_arn;
   campaign = await change(runtime, id, undefined, [campaign.status], { status: 'QUEUED', execution_arn: executionArn }, (current) => current.execution_arn === previousExecution);
   if (campaign?.execution_arn !== executionArn || campaign.status !== 'QUEUED') return currentAction(campaign, executionArn) ?? output('REVIEW', { reason: 'UNEXPECTED_STATUS' });
+  const budget = await workflowStep(runtime, id, executionArn, 'prepare');
+  if (budget) return budget;
   const config = await runtime.config.get();
-  if (!await runtime.lock.acquire(id, config.lock_ttl_seconds)) return output('WAIT_LOCK', { phase: 'prepare' });
+  if (!await runtime.lock.acquire(id, config.lock_ttl_seconds)) return boundedWait(runtime, id, executionArn, 'WAIT_LOCK', 'prepare');
+  campaign = await change(runtime, id, executionArn, ['QUEUED'], { wait_lock_run: 0, throttled_run: 0 });
+  const stoppedBeforeSnapshot = currentAction(campaign, executionArn);
+  if (stoppedBeforeSnapshot) { await runtime.lock.release(id); return stoppedBeforeSnapshot; }
   const fail = async (code) => {
     const saved = await change(runtime, id, executionArn, ['QUEUED'], { status: 'APPROVED', start_error: code, execution_arn: '' });
     await runtime.lock.release(id);

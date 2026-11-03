@@ -13,6 +13,24 @@ export const AWS_APIS = Object.freeze({
 });
 
 const defaultLoad = (name) => import(`@aws-sdk/client-${name}`);
+const defaultLoadVersion = (name) => import(`@aws-sdk/client-${name}/package.json`, { with: { type: 'json' } });
+
+export async function checkAwsSdk({ load = defaultLoad, loadVersion = defaultLoadVersion } = {}) {
+  const packages = await Promise.all(Object.values(AWS_APIS).map(async (definition) => {
+    const result = { package: `@aws-sdk/client-${definition.package}`, ok: false };
+    try {
+      const sdk = await load(definition.package);
+      result.ok = typeof sdk[definition.client] === 'function' && definition.operations.every((operation) => typeof sdk[`${operation}Command`] === 'function');
+      try {
+        const metadata = await loadVersion(definition.package);
+        const version = metadata.default?.version;
+        if (typeof version === 'string' && /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(version)) result.version = version;
+      } catch { /* 版の取得可否はSDK本体の成否に含めない。 */ }
+    } catch { /* モジュール読込エラーの自由文は返さない。 */ }
+    return result;
+  }));
+  return { ok: packages.every((entry) => entry.ok), packages };
+}
 
 export function createAwsAdapters({ region, load = defaultLoad, timeoutSignal = (ms) => AbortSignal.timeout(ms) } = {}) {
   return Object.fromEntries(Object.entries(AWS_APIS).map(([service, definition]) => {

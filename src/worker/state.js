@@ -12,7 +12,7 @@ export async function change(runtime, id, executionArn, statuses, set, match = (
     try {
       return await runtime.store.update('CAMPAIGN', id, campaignUpdate({
         version: campaign.version, from: statuses,
-        set: { ...set, updated_at: new Date(runtime.now()).toISOString() },
+        set: { ...(typeof set === 'function' ? set(campaign) : set), updated_at: new Date(runtime.now()).toISOString() },
       }));
     } catch (error) { if (!isConflict(error)) throw error; }
   }
@@ -69,8 +69,8 @@ export function currentAction(campaign, executionArn) {
   return undefined;
 }
 
-export async function pause(runtime, campaignId, executionArn, reason, code = reason, limiter) {
-  const saved = await change(runtime, campaignId, executionArn, ['SENDING'], { status: 'PAUSED', pause_reason: reason, paused_at: new Date(runtime.now()).toISOString() });
+export async function pause(runtime, campaignId, executionArn, reason, code = reason, limiter, phase = 'send') {
+  const saved = await change(runtime, campaignId, executionArn, phase === 'prepare' ? ['QUEUED'] : ['SENDING'], { status: 'PAUSED', pause_reason: reason, pause_phase: phase, paused_at: new Date(runtime.now()).toISOString() });
   if (saved?.execution_arn === executionArn) await runtime.lock.release(campaignId, limiter);
   if (saved?.status === 'PAUSED' && saved.pause_reason === reason) {
     runtime.metrics.emit('Paused', 1, { Reason: reason });
@@ -78,4 +78,25 @@ export async function pause(runtime, campaignId, executionArn, reason, code = re
     if (reason !== 'USER') await runtime.notify(code, campaignId);
   }
   return currentAction(saved, executionArn) ?? output('REVIEW', { reason: 'UNEXPECTED_STATUS' });
+}
+
+// 連続待機に加え、短い待機・再開・時間切れの反復にも実行単位の上限を設ける。
+export const WORKFLOW_STEP_LIMIT = 600;
+export async function workflowStep(runtime, id, executionArn, phase) {
+  const saved = await change(runtime, id, executionArn, [phase === 'prepare' ? 'QUEUED' : 'SENDING', 'PAUSED'], (current) => ({
+    workflow_execution_arn: executionArn,
+    workflow_steps: (current.workflow_execution_arn === executionArn ? current.workflow_steps ?? 0 : 0) + 1,
+    ...(current.workflow_execution_arn !== executionArn ? { wait_lock_run: 0, throttled_run: 0 } : {}),
+  }));
+  if (saved?.execution_arn === executionArn && saved.workflow_steps >= WORKFLOW_STEP_LIMIT && ['QUEUED', 'SENDING', 'PAUSED'].includes(saved.status)) return output('REVIEW', { reason: 'WORKFLOW_HISTORY_LIMIT' });
+  return currentAction(saved, executionArn);
+}
+
+export async function boundedWait(runtime, id, executionArn, action, phase, limiter) {
+  const field = action === 'WAIT_LOCK' ? 'wait_lock_run' : 'throttled_run';
+  const saved = await change(runtime, id, executionArn, [phase === 'prepare' ? 'QUEUED' : 'SENDING'], (current) => ({ [field]: (current[field] ?? 0) + 1 }));
+  const stopped = currentAction(saved, executionArn);
+  if (stopped) return stopped;
+  if (saved[field] >= (action === 'WAIT_LOCK' ? 288 : 30)) return pause(runtime, id, executionArn, action === 'WAIT_LOCK' ? 'LOCK_WAIT_TIMEOUT' : 'SES_UNSTABLE', undefined, limiter, phase);
+  return output(action, action === 'WAIT_LOCK' ? { phase } : {});
 }

@@ -4,6 +4,7 @@ import { marshall, unmarshall } from '../../common/ddb.js';
 import { normalizeEmail } from '../../common/email.js';
 import { contactPages, objectText, updateRecord, timestamp, conflict } from '../../common/records.js';
 import { ensureContactMetadata } from '../../common/contact-metadata.js';
+import { AppError } from '../../common/http.js';
 
 export async function importContacts(event, runtime) {
   let record = await runtime.store.get('IMPORT', event.import_id);
@@ -14,6 +15,7 @@ export async function importContacts(event, runtime) {
   }
   let acquired = false;
   try {
+    if ((await runtime.ses.getAccount({})).ProductionAccessEnabled !== true) throw new AppError('IMPORT_REQUIRES_PRODUCTION', 422, 'SESのサンドボックスではCSV取込を使えません。1件ずつ登録してください。');
     const source = await objectText(await runtime.s3.getObject({ Bucket: runtime.dataBucket, Key: `imports/staging/${record.import_id}.csv` }));
     const definition = await runtime.ses.getContactList({ ContactListName: runtime.contactList });
     const topics = (definition.Topics ?? []).map((topic) => topic.TopicName);
@@ -59,20 +61,20 @@ export async function importContacts(event, runtime) {
       await runtime.contactLock.change(record.import_id, {}, true);
       return { status: 'DONE' };
     }
-    const readyKey = `imports/ready/${record.import_id}.csv`;
+    const readyKey = `imports/ready/${record.import_id}.jsonl`;
     // SESに公開される前に、年齢によるTTLのない属性正本を保存する。
     for (let offset = 0; offset < accepted.length; offset += 20) {
       const results = await Promise.allSettled(accepted.slice(offset, offset + 20).map((row) => ensureContactMetadata(runtime, { EmailAddress: row.email, AttributesData: JSON.stringify(row.attributes) })));
       const failed = results.find((result) => result.status === 'rejected');
       if (failed) throw failed.reason;
     }
-    await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: readyKey, ContentType: 'text/csv; charset=utf-8', Body: writeSesImport(accepted, topics) });
+    await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: readyKey, ContentType: 'application/x-ndjson', Body: writeSesImport(accepted, topics) });
     // 呼出し前に不明状態を永続化し、応答を失っても再ジョブを作らない。
     record = await updateRecord(runtime, 'IMPORT', record.import_id, record, { status: 'SUBMITTING', total: report.total, ready: report.ready });
     await runtime.contactLock.change(record.import_id, { state: 'SUBMITTING' });
     const job = await runtime.ses.createImportJob({
       ImportDestination: { ContactListDestination: { ContactListName: runtime.contactList, ContactListImportAction: 'PUT' } },
-      ImportDataSource: { S3Url: `s3://${runtime.dataBucket}/${readyKey}`, DataFormat: 'CSV' },
+      ImportDataSource: { S3Url: `s3://${runtime.dataBucket}/${readyKey}`, DataFormat: 'JSON' },
     });
     if (!job.JobId) throw new Error('Missing import job ID');
     await runtime.contactLock.change(record.import_id, { state: 'IMPORTING', job_id: job.JobId });

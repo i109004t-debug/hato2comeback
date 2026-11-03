@@ -1,4 +1,4 @@
-import { change, currentAction, output, readChunk } from '../state.js';
+import { change, currentAction, output, readChunk, workflowStep } from '../state.js';
 
 export async function finish(event, runtime) {
   const { campaign_id: id, execution_arn: executionArn } = event;
@@ -7,6 +7,10 @@ export async function finish(event, runtime) {
   if (!campaign || campaign.execution_arn !== executionArn) return output('CANCELLED');
   const outcome = event.outcome ?? event.result?.action;
   try {
+    if (outcome !== 'REVIEW' && ['QUEUED', 'SENDING', 'PAUSED'].includes(campaign.status)) {
+      const budget = await workflowStep(runtime, id, executionArn, campaign.status === 'QUEUED' ? 'prepare' : 'send');
+      if (budget?.reason === 'WORKFLOW_HISTORY_LIMIT') return budget;
+    }
     if (campaign.status === 'CANCELLED') {
       if (!campaign.completed_at) campaign = await change(runtime, id, executionArn, ['CANCELLED'], { completed_at: new Date(runtime.now()).toISOString() });
       return output('CANCELLED');

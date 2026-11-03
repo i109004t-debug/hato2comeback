@@ -1,4 +1,4 @@
-import { createAwsAdapters } from '../common/aws.js';
+import { createAwsAdapters, checkAwsSdk } from '../common/aws.js';
 import { createConfig } from '../common/config.js';
 import { createDdb } from '../common/ddb.js';
 import { createSendLock } from '../common/lock.js';
@@ -14,7 +14,7 @@ import { prepare } from './modes/prepare.js';
 import { send } from './modes/send.js';
 import { finish } from './modes/finish.js';
 import { importContacts } from './modes/import.js';
-import { daily } from './modes/daily.js';
+import { daily, authentication } from './modes/daily.js';
 import { backfillContacts } from './modes/contact-backfill.js';
 import { createContactLock } from '../common/contact-lock.js';
 
@@ -53,7 +53,9 @@ export function createHandler(deps = {}) {
   return async (event, context = {}) => {
     const logger = deps.logger ?? createLogger({ fn: 'worker', req_id: context.awsRequestId, now: base.now });
     try {
-      if (!event || !['prepare', 'send', 'finish', 'import', 'daily', 'contact-backfill'].includes(event.mode)) throw invalid('mode');
+      if (!event || !['prepare', 'send', 'finish', 'import', 'daily', 'contact-backfill', 'sdk-check', 'auth-check'].includes(event.mode)) throw invalid('mode');
+      if (event.mode === 'sdk-check') return await checkAwsSdk({ load: deps.sdkLoad, loadVersion: deps.sdkVersionLoad });
+      if (event.mode === 'auth-check') return await authentication(initialize(context));
       if (event.mode === 'contact-backfill') return await backfillContacts(event, initialize(context), context);
       if (event.mode === 'daily') return await daily(event, initialize(context), context);
       if (event.mode === 'import') {

@@ -82,8 +82,10 @@ test('7.4 pauseの条件更新と中止の競合でも最新の中止を保持',
   f.onSend = async (_, n) => { if (n === 3) f.settings.sending_enabled = false; return { MessageId: `m${n}` }; };
   let raced = false;
   f.ddb.beforeUpdate = (input) => {
-    const values = Object.values(unmarshall(input.ExpressionAttributeValues ?? {}));
-    if (!raced && input.Key.PK.S === 'CAMPAIGN' && values.includes('PAUSED')) {
+    const values = unmarshall(input.ExpressionAttributeValues ?? {});
+    const status = Object.entries(input.ExpressionAttributeNames ?? {}).find(([, name]) => name === 'status')?.[0];
+    const assigned = status && new RegExp(`${status} = (:\\w+)`).exec(input.UpdateExpression)?.[1];
+    if (!raced && input.Key.PK.S === 'CAMPAIGN' && values[assigned] === 'PAUSED') {
       raced = true; f.setCampaign({ status: 'CANCELLED', version: f.getCampaign().version + 1 });
     }
   };

@@ -8,6 +8,7 @@ async function create({ runtime, body, user }) {
   const SK = `${user.sub}#${body.idempotencyKey}`;
   const existing = await runtime.store.get('IDEMP', SK);
   if (existing && existing.expires_at > runtime.now() / 1000) return { statusCode: 202, data: { import_id: existing.import_id, status: (await runtime.store.get('IMPORT', existing.import_id))?.status ?? 'RECEIVED' } };
+  if ((await runtime.ses.getAccount({})).ProductionAccessEnabled !== true) throw new AppError('IMPORT_REQUIRES_PRODUCTION', 422, 'SESのサンドボックスではCSV取込を使えません。1件ずつ登録してください。');
   if ((await runtime.contactLock.get())?.owner) throw new AppError('CONTACT_IMPORT_IN_PROGRESS', 409, '宛先の登録・取込を処理中です。');
   const id = (runtime.id ?? ulid)();
   const record = { PK: 'IMPORT', SK: id, import_id: id, status: 'RECEIVED', version: 0, created_at: timestamp(runtime), created_by: user.sub, expires_at: Math.floor(runtime.now() / 1000) + 365 * 86400 };

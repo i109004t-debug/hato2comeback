@@ -113,13 +113,16 @@ export function csvCell(value) {
 
 export function writeSesImport(rows, topics) {
   validateTopics(topics);
-  const lines = [['emailAddress', 'unsubscribeAll', 'attributesData', ...topics.map((value) => `topicPreferences.${value}`)]];
+  const lines = [];
   for (const row of rows) {
     validateTopics(row.topics);
     if (row.topics.some((value) => !topics.includes(value))) throw invalid('topics', 'UNKNOWN_TOPIC');
     const attributes = JSON.stringify(row.attributes);
     if (!row.attributes || Buffer.byteLength(attributes) > 1024) throw invalid('attributes', 'MAX_BYTES');
-    lines.push([normalizeEmail(row.email).email, 'false', attributes, ...topics.map((value) => row.topics.includes(value) ? 'OPT_IN' : 'OPT_OUT')]);
+    lines.push(JSON.stringify({
+      emailAddress: normalizeEmail(row.email).email, unsubscribeAll: false, attributesData: attributes,
+      topicPreferences: topics.map((topicName) => ({ topicName, subscriptionStatus: row.topics.includes(topicName) ? 'OPT_IN' : 'OPT_OUT' })),
+    }));
   }
-  return `${lines.map((line) => line.map(csvCell).join(',')).join('\n')}\n`;
+  return lines.length ? `${lines.join('\n')}\n` : '';
 }

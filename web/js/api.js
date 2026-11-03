@@ -1,4 +1,6 @@
 export const ERROR_MESSAGES = Object.freeze({
+  AUTH_CHECK_STALE: '設定を変更したため、送信元の確認をやり直しています。数分後にもう一度お試しください。',
+  IMPORT_REQUIRES_PRODUCTION: 'SESのサンドボックスではCSV取込を使えません。1件ずつ登録してください。',
   INVALID_REQUEST: '入力の形式を確認してください。', UNAUTHENTICATED: 'ログインの有効期限が切れました。再ログインしてください。',
   FORBIDDEN: 'この操作の権限がありません。管理者に確認してください。', FORBIDDEN_ORIGIN: '運営画面のURLから開き直してください。', USER_DISABLED: 'アカウントが無効です。管理者に確認してください。', NO_ROLE: '役割が設定されていません。管理者に確認してください。', NOT_FOUND: '対象の記録が見つかりません。',
   STATE_CONFLICT: '他の人が先に操作しました。画面を読み込み直してください。', VERSION_CONFLICT: '他の人が先に操作しました。画面を読み込み直してください。', HASH_MISMATCH: '承認画面を開いた後に内容が変わりました。画面を読み込み直し、内容を確かめてから承認してください。',

@@ -112,7 +112,11 @@ export const STATUS_LABELS = Object.freeze({ DRAFT: '下書き', PENDING_APPROVA
 export const statusLabel = (status) => STATUS_LABELS[status] ?? '状態を確認できません';
 export const resultLabel = (result) => ({ ACCEPTED: '送信受付', FAILED: '失敗', UNKNOWN: '不明', SKIPPED: '停止済みのため送らなかった', NOT_ATTEMPTED: '未試行' })[result] ?? '要確認';
 
-export const PAUSE_LABELS = Object.freeze({ USER: '運営スタッフの操作で停止しました。', OPERATOR_SWITCH: '全体の停止スイッチが入っています。', REPUTATION_ALARM: 'バウンス率や苦情率の警報が出ています。', CAMPAIGN_BOUNCE: 'この配信のバウンス率が高くなっています。', CAMPAIGN_DELAY: 'この配信の配送遅延率が高くなっています。', EVENTS_MISSING: '配送の記録が届いていません。', EVENT_LOG_STALE: '配送の記録が遅れています。', MONITORING_UNAVAILABLE: '監視の状態を確認できません。', CONTENT_ERROR: '固定した本文の処理に異常があります。', AUTH_CHECK: '送信元ドメインの認証を確認できません。', SES_PAUSED: 'SESが送信を止めています。', SES_UNSTABLE: 'SESの応答が不安定です。', QUOTA: 'SESの24時間の送信枠が足りません。' });
+export const PAUSE_LABELS = Object.freeze({
+  LOCK_WAIT_TIMEOUT: '他の配信の終了待ちが長く続いたため停止しました。管理者が実行状況を確認してください。',
+  AUTH_CHECK_STALE: '設定を変更したため、送信元の確認をやり直しています。数分後にもう一度お試しください。',
+  USER: '運営スタッフの操作で停止しました。', OPERATOR_SWITCH: '全体の停止スイッチが入っています。', REPUTATION_ALARM: 'バウンス率や苦情率の警報が出ています。', CAMPAIGN_BOUNCE: 'この配信のバウンス率が高くなっています。', CAMPAIGN_DELAY: 'この配信の配送遅延率が高くなっています。', EVENTS_MISSING: '配送の記録が届いていません。', EVENT_LOG_STALE: '配送の記録が遅れています。', MONITORING_UNAVAILABLE: '監視の状態を確認できません。', CONTENT_ERROR: '固定した本文の処理に異常があります。', AUTH_CHECK: '送信元ドメインの認証を確認できません。', SES_PAUSED: 'SESが送信を止めています。', SES_UNSTABLE: 'SESの応答が不安定です。', QUOTA: 'SESの24時間の送信枠が足りません。',
+});
 
 export function progressLines(campaign, stats = {}) {
   const counts = stats.counts ?? campaign.counts ?? {};

@@ -46,11 +46,23 @@ Resources:
               ScopeDownStatement:
                 NotStatement:
                   Statement:
-                    SizeConstraintStatement:
-                      FieldToMatch: {Body: {OversizeHandling: MATCH}}
-                      ComparisonOperator: GT
-                      Size: 65536
-                      TextTransformations: [{Priority: 0, Type: NONE}]
+                    AndStatement:
+                      Statements:
+                        - ByteMatchStatement:
+                            FieldToMatch: {Method: {}}
+                            PositionalConstraint: EXACTLY
+                            SearchString: POST
+                            TextTransformations: [{Priority: 0, Type: NONE}]
+                        - ByteMatchStatement:
+                            FieldToMatch: {UriPath: {}}
+                            PositionalConstraint: EXACTLY
+                            SearchString: /api/v1/imports
+                            TextTransformations: [{Priority: 0, Type: NONE}]
+                        - SizeConstraintStatement:
+                            FieldToMatch: {Body: {OversizeHandling: MATCH}}
+                            ComparisonOperator: GT
+                            Size: 65536
+                            TextTransformations: [{Priority: 0, Type: NONE}]
           VisibilityConfig: {CloudWatchMetricsEnabled: true, SampledRequestsEnabled: false, MetricName: Common}
         - Name: KnownBadInputs
           Priority: 1
@@ -62,11 +74,23 @@ Resources:
               ScopeDownStatement:
                 NotStatement:
                   Statement:
-                    SizeConstraintStatement:
-                      FieldToMatch: {Body: {OversizeHandling: MATCH}}
-                      ComparisonOperator: GT
-                      Size: 65536
-                      TextTransformations: [{Priority: 0, Type: NONE}]
+                    AndStatement:
+                      Statements:
+                        - ByteMatchStatement:
+                            FieldToMatch: {Method: {}}
+                            PositionalConstraint: EXACTLY
+                            SearchString: POST
+                            TextTransformations: [{Priority: 0, Type: NONE}]
+                        - ByteMatchStatement:
+                            FieldToMatch: {UriPath: {}}
+                            PositionalConstraint: EXACTLY
+                            SearchString: /api/v1/imports
+                            TextTransformations: [{Priority: 0, Type: NONE}]
+                        - SizeConstraintStatement:
+                            FieldToMatch: {Body: {OversizeHandling: MATCH}}
+                            ComparisonOperator: GT
+                            Size: 65536
+                            TextTransformations: [{Priority: 0, Type: NONE}]
           VisibilityConfig: {CloudWatchMetricsEnabled: true, SampledRequestsEnabled: false, MetricName: KnownBadInputs}
         - Name: IpReputation
           Priority: 2

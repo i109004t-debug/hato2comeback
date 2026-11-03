@@ -48,20 +48,22 @@ case "${2:-}" in
     aws dynamodb query --region "$REGION" --table-name "ht2-$ENV" --consistent-read \
       --key-condition-expression 'PK = :pk' --expression-attribute-values '{":pk":{"S":"ERASED"}}' --output json > "$DIR/erased.json"
     aws sesv2 list-contacts --region "$REGION" --contact-list-name "$LIST" --output json > "$DIR/current-contacts.json"
-    printf 'Exported %s. Repeat export for every audit month. Reconcile attributes/HMAC erasures, latest SES stops and deduplicated Subscription transitions with Athena; review the CSV and evidence before import.\n' "$DIR"
+    printf 'Exported %s. Repeat export for every audit month. Reconcile attributes/HMAC erasures, latest SES stops and deduplicated Subscription transitions with Athena; review the SES JSON Lines file and evidence before import.\n' "$DIR"
     ;;
   import)
     frozen
-    CSV=${3:?reviewed SES CSV file}; REVIEW=${4:?review evidence S3 key}
-    [[ -f $CSV && $REVIEW == delivery-checks/* ]] || die 'Reviewed CSV and private evidence key required'
+    JSONL=${3:?reviewed SES JSON Lines file}; REVIEW=${4:?review evidence S3 key}
+    [[ -f $JSONL && $REVIEW == delivery-checks/* ]] || die 'Reviewed JSON Lines and private evidence key required'
+    PRODUCTION=$(aws_text sesv2 get-account --region "$REGION" --query ProductionAccessEnabled --output text)
+    [[ $PRODUCTION == True || $PRODUCTION == true ]] || die 'SES sandbox does not support import; production access is required'
     aws s3api head-object --region "$REGION" --bucket "$BUCKET" --key "$REVIEW" --query ContentLength >/dev/null
     wait_input "Confirm erased HMAC exclusion, attributes, consent, latest SES stops/suppression and stop deltas through now. Type: restore $HT2_ACCOUNT_ID $ENV" "restore $HT2_ACCOUNT_ID $ENV"
-    KEY="imports/ready/restore-$EPOCHSECONDS.csv"
-    aws s3 cp "$CSV" "s3://$BUCKET/$KEY" --region "$REGION" --content-type 'text/csv; charset=utf-8'
+    KEY="imports/ready/restore-$EPOCHSECONDS.jsonl"
+    aws s3 cp "$JSONL" "s3://$BUCKET/$KEY" --region "$REGION" --content-type 'application/x-ndjson'
     # 結果不明でも同じジョブを自動作成しない。CloudTrailで照合する。
     aws sesv2 create-import-job --region "$REGION" \
       --import-destination "{\"ContactListDestination\":{\"ContactListName\":\"$LIST\",\"ContactListImportAction\":\"PUT\"}}" \
-      --import-data-source "{\"S3Url\":\"s3://$BUCKET/$KEY\",\"DataFormat\":\"CSV\"}" --output json
+      --import-data-source "{\"S3Url\":\"s3://$BUCKET/$KEY\",\"DataFormat\":\"JSON\"}" --output json
     printf 'Keep sending and API disabled. Record JobId; use status, then apply-stops for post-import deltas.\n'
     ;;
   status)

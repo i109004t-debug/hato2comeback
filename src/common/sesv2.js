@@ -33,7 +33,7 @@ export function createSesv2(deps) {
     for (let attempt = 0; ; attempt += 1) {
       await acquire();
       try { return await ses[method](input); } catch (error) {
-        if (error.name !== 'TooManyRequestsException') throw error;
+        if (!['TooManyRequestsException', 'ThrottlingException'].includes(error.name)) throw error;
         metrics?.emit('SesBusy', 1);
         if (attempt === 5) throw new AppError('SES_BUSY', 503, 'SESが混み合っています。時間をおいて再度お試しください。');
         await sleep(1000 * 2 ** attempt);

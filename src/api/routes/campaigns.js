@@ -139,7 +139,7 @@ async function preview(ctx) {
     const f = await fixed(ctx.runtime, campaign);
     return { subject: campaign.subject, text: f.text, warnings: bodyWarnings(campaign.body_text) };
   }
-  const result = await ctx.runtime.ses.testRenderEmailTemplate({ TemplateName: campaign.template_name, TemplateData: '{}' });
+  const result = await ctx.runtime.ses.testRenderEmailTemplate({ TemplateName: campaign.template_name, TemplateData: JSON.stringify({ amazonSESUnsubscribeUrl: '（配信停止のURLがここに入ります）' }) });
   return { subject: campaign.subject, text: decodeTextMime(result.RenderedTemplate), content_sha256: campaign.content_sha256 };
 }
 
@@ -279,7 +279,7 @@ async function resume(ctx) {
     try { await ctx.runtime.s3.headObject({ Bucket: ctx.runtime.dataBucket, Key: ctx.body.evidence_key }); } catch { throw invalid('evidence_key', 'NOT_FOUND'); }
   }
   await check(ctx, campaign, { force: true });
-  let saved = await updateCampaign(ctx.runtime, campaign, ['PAUSED'], { status: 'SENDING', pause_reason: '', resumed_at: timestamp(ctx.runtime) });
+  let saved = await updateCampaign(ctx.runtime, campaign, ['PAUSED'], { status: campaign.pause_phase === 'prepare' ? 'QUEUED' : 'SENDING', pause_reason: '', wait_lock_run: 0, throttled_run: 0, resumed_at: timestamp(ctx.runtime) });
   await ctx.audit('RESUME', campaign.campaign_id, { previous_reason: campaign.pause_reason, note: ctx.body.note ?? '', evidence_key: ctx.body.evidence_key ?? '' });
   if (campaign.task_token) {
     await ctx.runtime.sfn.sendTaskSuccess({ taskToken: campaign.task_token, output: '{}' });
@@ -390,11 +390,11 @@ async function stats(ctx) {
     if (page.Messages?.length) throw new AppError('MONITORING_UNAVAILABLE', 503, '結果を取得できません。');
     for (let i = 0; i < names.length; i += 1) {
       const result = page.MetricDataResults?.find((item) => item.Id === `m${i}`);
-      if (result?.StatusCode !== 'Complete' || !Array.isArray(result.Values) || result.Values.some((value) => !Number.isFinite(value) || value < 0)) throw new AppError('MONITORING_UNAVAILABLE', 503, '結果を取得できません。');
+      if (!(result?.StatusCode === 'Complete' || page.NextToken && result?.StatusCode === 'PartialData') || !Array.isArray(result.Values) || result.Values.some((value) => !Number.isFinite(value) || value < 0)) throw new AppError('MONITORING_UNAVAILABLE', 503, '結果を取得できません。');
       points[i].push(...result.Values);
     }
     token = page.NextToken;
-    if (token && seen.has(token)) throw new Error('Repeated metric cursor');
+    if (token && seen.has(token)) throw new AppError('MONITORING_UNAVAILABLE', 503, '結果を取得できません。');
     if (token) seen.add(token);
   } while (token);
   const value = { counts: campaign.counts ?? {}, metrics: Object.fromEntries(names.map((name, i) => [name, points[i].length ? points[i].reduce((a, b) => a + b, 0) : null])), observed_at: timestamp(ctx.runtime) };

@@ -30,7 +30,7 @@ export function createMonitoring(deps) {
       assertHealthy(Array.isArray(page.MetricDataResults) && !page.Messages?.length, 'MONITORING_UNAVAILABLE');
       for (const id of Object.keys(metricNames)) {
         const result = page.MetricDataResults.find((entry) => entry.Id === id);
-        assertHealthy(result?.StatusCode === 'Complete' && Array.isArray(result.Values) && result.Values.every((value) => Number.isFinite(value) && value >= 0), 'MONITORING_UNAVAILABLE');
+        assertHealthy((result?.StatusCode === 'Complete' || page.NextToken && result?.StatusCode === 'PartialData') && Array.isArray(result.Values) && result.Values.every((value) => Number.isFinite(value) && value >= 0), 'MONITORING_UNAVAILABLE');
         values[id].push(...result.Values);
       }
       token = page.NextToken;
@@ -59,8 +59,8 @@ export function createMonitoring(deps) {
           if (alarm.StateValue === 'ALARM') {
             assertHealthy(false, config.reputation_alarms.includes(name) ? 'REPUTATION_ALARM' : name.endsWith('rendering-or-reject') ? 'CONTENT_ERROR' : 'EVENT_LOG_STALE');
           }
-          // 無履歴を正常率ゼロにはしない。一般配信には受入記録の承認を必要とする。
-          if (config.reputation_alarms.includes(name) && alarm.StateValue === 'INSUFFICIENT_DATA') assertHealthy(test || deliveryValid, 'MONITORING_UNAVAILABLE');
+          // 本番の観測不足は受入記録で判断し、検証環境では初回の一般配信も許可する。
+          if (config.reputation_alarms.includes(name) && alarm.StateValue === 'INSUFFICIENT_DATA') assertHealthy(env !== 'prod' || test || deliveryValid, 'MONITORING_UNAVAILABLE');
         }
         if (campaign?.started_at) {
           const metrics = await totals(campaign);

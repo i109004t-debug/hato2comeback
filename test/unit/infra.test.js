@@ -52,7 +52,7 @@ test('3.1〜3.4 SES認証・TLS・2発行先・Retain・OPT_OUTとDNS出力', ()
   assert.equal((resources.ContactList.match(/DefaultSubscriptionStatus: OPT_OUT/g) ?? []).length, 2);
   for (const name of ['CloudWatchDestination', 'FirehoseDestination']) {
     assert.match(resources[name], /Enabled: true/);
-    const events = /MatchingEventTypes: \[([^\]]+)\]/.exec(resources[name])[1].split(',').map((s) => s.trim().replace('deliveryDelay', 'DELIVERY_DELAY').replace('renderingFailure', 'RENDERING_FAILURE').toUpperCase());
+    const events = /MatchingEventTypes: \[([^\]]+)\]/.exec(resources[name])[1].split(',').map((s) => s.trim());
     assert.deepEqual(events, REQUIRED_EVENTS);
     assert.doesNotMatch(resources[name], /\b(open|click)\b/);
   }
@@ -80,7 +80,7 @@ test('4.3〜4.5 PITR、TTL、削除保護、暗号化、公開ブロック、全
   assert.match(resources.DataBucketPolicy, /Principal: \{Service: ses.amazonaws.com\}/);
   assert.match(resources.DataBucketPolicy, /imports\/ready\/\*/);
   assert.match(resources.DataBucketPolicy, /aws:SourceAccount/);
-  assert.match(resources.DataBucketPolicy, /aws:SourceArn/);
+  assert.doesNotMatch(resources.DataBucketPolicy, /aws:SourceArn/);
 });
 
 test('7.2 ASLの全差し込み名がDefinitionSubstitutionsと完全一致する', () => {
@@ -155,7 +155,7 @@ const apiOperations = {
 };
 const workerOperations = {
   sfn: 'DescribeExecution', scheduler: 'GetSchedule',
-  ses: 'GetAccount GetEmailIdentity GetConfigurationSet GetConfigurationSetEventDestinations GetContactList ListContacts SendEmail CreateImportJob GetImportJob DeleteEmailTemplate',
+  ses: 'GetAccount GetEmailIdentity GetConfigurationSet GetConfigurationSetEventDestinations GetContactList ListContacts GetContact DeleteContact SendEmail CreateImportJob GetImportJob DeleteEmailTemplate',
   ddb: 'GetItem PutItem UpdateItem Query BatchGetItem', s3: 'PutObject GetObject HeadObject', cloudwatch: 'GetMetricData DescribeAlarms', sns: 'Publish', ssm: 'GetParameter', secrets: 'GetSecretValue',
 };
 const prefixes = {ses:'ses',ddb:'dynamodb',s3:'s3',sfn:'states',scheduler:'scheduler',cognito:'cognito-idp',cloudwatch:'cloudwatch',sns:'sns',ssm:'ssm',secrets:'secretsmanager',lambda:'lambda'};
@@ -275,7 +275,8 @@ test('12.8 環境別アカウント例・リージョン固定・全パラメー
 
 test('13.3 アラームの物理名・しきい値・missingとUSER以外の停止通知', () => {
   for (const suffix of ['ses-bounce-rate','ses-complaint-rate','needs-review','unknown-results','paused-by-system','sfn-failed','api-lambda-errors','worker-lambda-errors','ses-busy','firehose-delivery','firehose-freshness','rendering-or-reject','api-5xx']) assert.ok(main.includes(`ht2-\${Env}-${suffix}'`), suffix);
-  for (const name of ['SesBounceRateAlarm','SesComplaintRateAlarm','FirehoseDeliveryAlarm','FirehoseFreshnessAlarm']) assert.match(resources[name], /TreatMissingData: missing/);
+  for (const name of ['SesBounceRateAlarm','SesComplaintRateAlarm']) assert.match(resources[name], /TreatMissingData: ignore/);
+  for (const name of ['FirehoseDeliveryAlarm','FirehoseFreshnessAlarm']) assert.match(resources[name], /TreatMissingData: missing/);
   assert.match(resources.SesBounceRateAlarm, /Threshold: 0.03/);
   assert.match(resources.SesComplaintRateAlarm, /Threshold: 0.0008/);
   assert.match(resources.FirehoseDeliveryAlarm, /Statistic: Minimum/);
@@ -310,7 +311,8 @@ function preserveWebConfig(t) {
 test('15.3 全スクリプトはstrict bashで、AWS CLI以外の実行環境・外部パッケージ不要', () => {
   for (const name of scripts) {
     const source=read(`scripts/${name}`);
-    assert.ok(source.startsWith('#!/usr/bin/env bash\nset -euo pipefail\n'),name);
+    if (name === 'env.sh') assert.doesNotMatch(source, /\bset\s+-|\bexit\b/);
+    else assert.ok(source.startsWith('#!/usr/bin/env bash\nset -euo pipefail\n'),name);
     assert.doesNotMatch(source, /(?:^|[;|&]|\$\()\s*(?:npm|npx|jq|python3?|node|curl|zip|sam|terraform|cdk)\s/m);
     const result=spawnSync(bash,['-n',`scripts/${name}`],{cwd:root,encoding:'utf8'});
     assert.ifError(result.error);
@@ -430,13 +432,10 @@ test('4.3・12.7 保持資源は初回作成失敗だけ削除し、更新置換
   assert.doesNotMatch(main, /DeletionPolicy: Retain\n|AWS::SSM::Parameter/);
 });
 
-test('12.6 ListBucketはDataBucketと読取接頭辞へ限定', () => {
+test('12.6 ListBucketはDataBucketだけに許可し、GetObjectの不存在判定にprefix条件を使わない', () => {
   for (const name of ['ApiPolicy', 'WorkerPolicy']) {
-    const block = /Action: \['s3:ListBucket'\]\n\s+Resource: !GetAtt DataBucket.Arn\n\s+Condition:\n\s+StringLike: \{'s3:prefix': \[([^\]]+)\]\}/.exec(resources[name]);
-    assert.ok(block, name);
-    for (const prefix of ['imports/report/*', 'results/*', 'recipients/*', 'delivery-checks/*']) assert.ok(block[1].includes(`'${prefix}'`));
-    assert.doesNotMatch(block[1], /'\*'/);
-    if (name === 'WorkerPolicy') for (const prefix of ['imports/staging/*', 'imports/ready/*', 'backups/contacts/*']) assert.ok(block[1].includes(`'${prefix}'`));
+    assert.match(resources[name], /Action: \['s3:ListBucket'\]\n\s+Resource: !GetAtt DataBucket.Arn\n\s+- /);
+    assert.doesNotMatch(resources[name], /s3:prefix/);
   }
 });
 
@@ -517,7 +516,7 @@ test('15.3 WindowsのCRLF出力でもアカウント・出力・Topics・復元�
     assert.equal(r.status, 0, `${script}: ${r.stderr}`);
   }
   assert.match(read('scripts/common.sh'), /AWS_CLI_FILE_ENCODING=UTF-8/);
-  for (const name of scripts.filter((name) => name !== 'common.sh')) assert.doesNotMatch(read(`scripts/${name}`), /\$\(aws\s|< <\(aws\s/);
+  for (const name of scripts.filter((name) => !['common.sh', 'env.sh'].includes(name))) assert.doesNotMatch(read(`scripts/${name}`), /\$\(aws\s|< <\(aws\s/);
 });
 
 test('15.3 画面は拡張子別Content-Typeと再検証キャッシュ指定で公開', (t) => {
@@ -561,4 +560,104 @@ test('第6段階の資料は現行の構築・画面・鍵・イベント手順�
   assert.match(build, /"MailType": "MARKETING"/);
   assert.doesNotMatch(build, /画面本体がまだない|UsePreviousValue|HT2_HMAC|"TRANSACTIONAL"/);
   for (const term of ['OptIn/OptOut', 'OPT_IN/OPT_OUT', 'topicSubscriptionStatus', 'topicDefaultSubscriptionStatus', 'AttributesData', 'UTF-8', 'base64として復号しない', '存在しない場合だけ']) assert.ok(operations.includes(term), term);
+});
+
+test('第8段階8 WAF除外はPOST /api/v1/importsの64KiB超だけ', () => {
+  for (const name of ['Common', 'KnownBadInputs']) {
+    const rule = edge.split(`        - Name: ${name}\n`)[1].split('\n        - Name: ')[0];
+    assert.match(rule, /ScopeDownStatement:\n\s+NotStatement:\n\s+Statement:\n\s+AndStatement:\n\s+Statements:/);
+    assert.equal((rule.match(/ByteMatchStatement:/g) ?? []).length, 2);
+    const method = /FieldToMatch: \{Method: \{\}\}\n\s+PositionalConstraint: EXACTLY\n\s+SearchString: (\S+)/.exec(rule)?.[1];
+    const path = /FieldToMatch: \{UriPath: \{\}\}\n\s+PositionalConstraint: EXACTLY\n\s+SearchString: (\S+)/.exec(rule)?.[1];
+    const size = Number(/ComparisonOperator: GT\n\s+Size: (\d+)/.exec(rule)?.[1]);
+    const excluded = (verb, uri, bytes) => verb === method && uri === path && bytes > size;
+    assert.equal(excluded('POST', '/api/v1/imports', 65537), true);
+    for (const [verb, uri, bytes] of [
+      ['POST', '/api/v1/imports', 65536], ['GET', '/api/v1/imports', 65537], ['PUT', '/api/v1/imports', 65537],
+      ['POST', '/api/v1/imports/id', 65537], ['POST', '/api/v1/imports/', 65537], ['POST', '/api/v1/campaigns', 100000], ['POST', '/', 100000],
+    ]) assert.equal(excluded(verb, uri, bytes), false, `${name} ${verb} ${uri} ${bytes}`);
+  }
+});
+
+test('第8段階13 SESが改行済みのFirehoseレコードに区切りを付け足さない', () => {
+  assert.doesNotMatch(resources.EventStream, /AppendDelimiterToRecord|ProcessingConfiguration/);
+});
+
+test('第8段階14 Cognitoの境界とトピック表示名・説明の長さを制約', () => {
+  const params = blocks(main, 'Parameters');
+  const pattern = new RegExp(/AllowedPattern: '([^']+)'/.exec(params.CognitoDomainPrefix)[1]);
+  for (const value of ['a', 'ht2-test', 'a'.repeat(63)]) assert.equal(pattern.test(value), true, value);
+  for (const value of ['', '-a', 'a-', 'UPPER', 'a_b', 'a'.repeat(64)]) assert.equal(pattern.test(value), false, value);
+  for (const n of [1, 2]) {
+    assert.match(params[`Topic${n}Display`], /MaxLength: 128/);
+    assert.match(params[`Topic${n}Description`], /MaxLength: 500/);
+  }
+});
+
+test('第8段階12・16 workerの削除権限とAPIの再確認起動権限を同環境に限定', () => {
+  assert.match(resources.WorkerPolicy, /Action: \['ses:GetContact', 'ses:DeleteContact'\]\n\s+Resource: !Sub 'arn:\$\{AWS::Partition\}:ses:\$\{AWS::Region\}:\$\{AWS::AccountId\}:contact-list\/ht2'/);
+  assert.match(resources.ApiPolicy, /Action: \['lambda:InvokeFunction'\]\n\s+Resource: !Sub 'arn:\$\{AWS::Partition\}:lambda:\$\{AWS::Region\}:\$\{AWS::AccountId\}:function:ht2-\$\{Env\}-worker'/);
+  for (const n of [12, 13]) {
+    assert.match(resources.PausedBySystemAlarm, new RegExp(`A${n}: !Ref SystemPauseReason${n}Alarm`));
+    assert.match(resources[`SystemPauseReason${n}Alarm`], /MetricName: Paused/);
+  }
+});
+
+test('第8段階6 smokeはsdk-checkを同期実行し失敗・不明な応答では停止', () => {
+  const passed = runScript('smoke.sh', ['dev'], { MOCK_CRLF: '1', MOCK_SDK_RESULT: '{"ok":true,"packages":[{"package":"@aws-sdk/client-sesv2","ok":true}]}' });
+  assert.equal(passed.status, 0, passed.stderr);
+  assert.match(passed.calls, /lambda invoke .*--invocation-type RequestResponse .*--payload \{"mode":"sdk-check"\}/);
+  for (const env of [{ MOCK_SDK_RESULT: '{"ok":false,"packages":[{"ok":false}]}' }, { MOCK_FUNCTION_ERROR: 'Unhandled' }, { MOCK_SDK_RESULT: '{"errorType":"Error"}' }]) {
+    const result = runScript('smoke.sh', ['dev'], env);
+    assert.notEqual(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.calls, /cloudfront get-distribution/);
+    assert.equal((result.calls.match(/lambda invoke/g) ?? []).length, 1);
+  }
+});
+
+test('第8段階9 復元もSES JSON Linesで取込み、サンドボックスと取得障害では止まる', () => {
+  const args = ['dev', 'import', 'package.json', 'delivery-checks/review.json'];
+  const passed = runScript('restore-contacts.sh', args, {}, 'restore 111111111111 dev\n');
+  assert.equal(passed.status, 0, passed.stderr);
+  assert.match(passed.calls, /imports\/ready\/restore-\d+\.jsonl .*--content-type application\/x-ndjson/);
+  assert.match(passed.calls, /"DataFormat":"JSON"/);
+  assert.doesNotMatch(passed.calls, /"DataFormat":"CSV"/);
+  for (const env of [{ MOCK_PRODUCTION: 'False' }, { MOCK_ACCOUNT_ERROR: '1' }]) {
+    const result = runScript('restore-contacts.sh', args, env, 'restore 111111111111 dev\n');
+    assert.notEqual(result.status, 0);
+    assert.doesNotMatch(result.calls, /s3 cp|create-import-job/);
+  }
+});
+
+function runEnvironment(code) {
+  const result = spawnSync(bash, ['-c', code], { cwd: root, encoding: 'utf8', env: { ...process.env, HT2_ACCOUNT_ID: '111111111111' } });
+  assert.ifError(result.error);
+  return result;
+}
+
+test('第8段階17 env.shをsourceしてもシェルのオプション・作業場所を変更しない', () => {
+  const result = runEnvironment(`before_options=$-; before_dir=$PWD; before_pipe=$(set -o | while read -r key value; do [[ $key != pipefail ]] || printf '%s' "$value"; done)
+source scripts/env.sh
+[[ $before_options == "$-" && $before_dir == "$PWD" ]] || exit 51
+after_pipe=$(set -o | while read -r key value; do [[ $key != pipefail ]] || printf '%s' "$value"; done)
+[[ $before_pipe == "$after_pipe" && $AWS_PAGER == '' && $AWS_MAX_ATTEMPTS == 1 && $AWS_CLI_FILE_ENCODING == UTF-8 ]] || exit 52
+aws() { printf '111111111111\\r\\n'; }
+init_env dev || exit 53
+[[ $ENV == dev && $STACK == ht2-main-dev ]] || exit 54
+printf survived`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, 'survived');
+});
+
+for (const [name, code, expected] of [
+  ['不正環境', 'init_env unknown', 1],
+  ['アカウント不一致', 'aws() { printf "222222222222\\n"; }; init_env dev', 1],
+  ['アカウント取得失敗', 'aws() { return 57; }; init_env dev', 57],
+  ['出力の欠落', 'aws() { printf "None\\n"; }; output Missing ht2-main-dev', 1],
+  ['出力取得失敗', 'aws() { return 58; }; output Missing ht2-main-dev', 58],
+  ['未初期化', 'output Missing', 1],
+]) test(`第8段階17 ${name}はreturnで返し端末を終了しない`, () => {
+  const result = runEnvironment(`source scripts/env.sh\n${code}\nstatus=$?\nprintf 'survived:%s' "$status"`);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `survived:${expected}`);
 });

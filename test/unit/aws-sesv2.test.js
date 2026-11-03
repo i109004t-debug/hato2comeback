@@ -157,6 +157,25 @@ test('3.8 一時的な制限から復帰し、それ以外の失敗は再試行�
   assert.equal(failure.calls.length, 1);
 });
 
+test('第8段階2 制御APIのThrottlingExceptionも待機後に再試行し、上限でSES_BUSY', async () => {
+  const recover = fixture({ failures: 2, failName: 'ThrottlingException' });
+  assert.deepEqual(await createSesv2(recover.deps).getAccount({}), { SendingEnabled: true });
+  assert.equal(recover.calls.length, 3);
+  assert.ok(recover.calls[1] - recover.calls[0] >= 1100);
+  const exhausted = fixture({ failures: 6, failName: 'ThrottlingException' });
+  await assert.rejects(createSesv2(exhausted.deps).getAccount({}), { code: 'SES_BUSY' });
+  assert.equal(exhausted.calls.length, 6);
+});
+
+test('第8段階2 制御ラッパーはSendEmailのThrottlingExceptionを再試行しない', async () => {
+  const f = fixture();
+  let attempts = 0;
+  f.deps.ses.sendEmail = async () => { attempts += 1; throw Object.assign(new Error(), { name: 'ThrottlingException' }); };
+  await assert.rejects(createSesv2(f.deps).sendEmail({}), { name: 'ThrottlingException' });
+  assert.equal(attempts, 1);
+  assert.equal(f.updates.length, 0);
+});
+
 test('7.5 SendEmailは間引き対象外、タイムアウトでも自動再試行しない', async () => {
   const f = fixture();
   await assert.rejects(createSesv2(f.deps).sendEmail({}), { name: 'TimeoutError' });

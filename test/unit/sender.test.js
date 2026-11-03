@@ -21,6 +21,9 @@ test('7.5 trySendの全分類、HTTP状態のない例外・全5xxはUNKNOWN', (
   const cases = [
     ['TooManyRequestsException', 429, 'Maximum sending rate exceeded', 'RATE_LIMIT'],
     ['TooManyRequestsException', 429, 'Daily message quota exceeded', 'QUOTA'],
+    ['ThrottlingException', 400, 'Maximum sending rate exceeded', 'RATE_LIMIT'],
+    ['ThrottlingException', 400, 'Daily message quota exceeded', 'QUOTA'],
+    ['ThrottlingException', 400, 'Unrecognized throttling message', 'CONFIG_ERROR'],
     ['LimitExceededException', 400, '24 hour sending limit exceeded', 'QUOTA'],
     ['SendingPausedException', 400, '', 'SES_PAUSED'], ['AccountSuspendedException', 400, '', 'SES_PAUSED'],
     ['BadRequestException', 400, 'Invalid email address', 'FAILED'], ['BadRequestException', 400, 'Invalid template', 'CONFIG_ERROR'],

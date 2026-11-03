@@ -12,7 +12,7 @@ export function classifySendError(error) {
   if (status < 400 || status >= 500) return { type: 'UNKNOWN', code };
   if (/daily.{0,30}(?:message.{0,10})?quota|24.{0,10}hour.{0,30}(?:quota|limit)/i.test(error.message ?? '')) return { type: 'QUOTA', code: 'QUOTA' };
   if (['SendingPausedException', 'AccountSuspendedException'].includes(name)) return { type: 'SES_PAUSED', code };
-  if (name === 'TooManyRequestsException') return { type: 'RATE_LIMIT', code };
+  if (name === 'TooManyRequestsException' || name === 'ThrottlingException' && /Maximum sending rate exceeded/i.test(error.message ?? '')) return { type: 'RATE_LIMIT', code };
   if (name === 'BadRequestException' && /(?:email|e-mail|recipient|address).{0,50}(?:invalid|malformed|format|syntax)|(?:invalid|malformed).{0,50}(?:email|e-mail|recipient|address)/i.test(error.message ?? '')) return { type: 'FAILED', code };
   return { type: 'CONFIG_ERROR', code };
 }

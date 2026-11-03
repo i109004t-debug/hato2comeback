@@ -32,6 +32,9 @@ mock_aws() {
         *"OutputKey=='SenderDomainName'"*) printf 'fc.dev.example.jp\n' ;;
         *"OutputKey=='DataBucketName'"*) printf 'example-data\n' ;;
         *"OutputKey=='ContactListName'"*) printf 'ht2\n' ;;
+        *"OutputKey=='WorkerFunctionName'"*) printf 'ht2-dev-worker\n' ;;
+        *"OutputKey=='StateMachineArn'"*) printf 'arn:aws:states:ap-northeast-1:111111111111:stateMachine:ht2-dev\n' ;;
+        *"OutputKey=='ConfigurationSetName'"*) printf 'ht2-dev\n' ;;
         *) printf 'unexpected mock query: %s\n' "$args" >&2; return 99 ;;
       esac ;;
     'cloudformation describe-change-set')
@@ -41,6 +44,11 @@ mock_aws() {
         *) printf 'reviewed\n' ;;
       esac ;;
     'sesv2 get-contact-list') printf 'kaiho\tevent\n' ;;
+    'sesv2 get-account') [[ ${MOCK_ACCOUNT_ERROR:-0} == 0 ]] || return 254; printf '%s\n' "${MOCK_PRODUCTION:-True}" ;;
+    'lambda invoke')
+      printf '%s\n' "${MOCK_SDK_RESULT:-{\"ok\":true,\"packages\":[]}}" > "${@: -1}"
+      printf '%s\n' "${MOCK_FUNCTION_ERROR:-None}" ;;
+    'cloudfront get-distribution'|'stepfunctions describe-state-machine'|'sesv2 get-configuration-set-event-destinations'|'cloudwatch describe-alarms') printf '{}\n' ;;
     'ssm get-parameter')
       case "${MOCK_CONFIG:-exists}" in
         missing) printf 'An error occurred (ParameterNotFound) when calling GetParameter\n' >&2; return 254 ;;

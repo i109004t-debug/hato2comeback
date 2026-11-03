@@ -23,7 +23,7 @@ Parameters:
     AllowedPattern: 'arn:aws:wafv2:us-east-1:[0-9]{12}:global/webacl/.+'
   CognitoDomainPrefix:
     Type: String
-    AllowedPattern: '[a-z0-9-]{1,63}'
+    AllowedPattern: '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
   AlertEmail:
     Type: String
   WorkerReservedConcurrency:
@@ -42,9 +42,11 @@ Parameters:
     AllowedPattern: '[a-z0-9_]{1,20}'
   Topic1Display:
     Type: String
+    MaxLength: 128
     Default: 会報
   Topic1Description:
     Type: String
+    MaxLength: 500
     Default: 毎月の会報をお届けします
   Topic2Name:
     Type: String
@@ -52,9 +54,11 @@ Parameters:
     AllowedPattern: '([a-z0-9_]{1,20})?'
   Topic2Display:
     Type: String
+    MaxLength: 128
     Default: イベント・チケット情報
   Topic2Description:
     Type: String
+    MaxLength: 500
     Default: イベントやチケット先行受付のお知らせ
 Rules:
   AccountAndRegion:
@@ -127,7 +131,6 @@ Resources:
             Resource: !Sub '${DataBucket.Arn}/imports/ready/*'
             Condition:
               StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
-              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:import-job/*'}
   EventLogBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
@@ -196,7 +199,7 @@ Resources:
       EventDestination:
         Name: cloudwatch
         Enabled: true
-        MatchingEventTypes: [send, reject, bounce, complaint, delivery, deliveryDelay, subscription, renderingFailure]
+        MatchingEventTypes: [SEND, REJECT, BOUNCE, COMPLAINT, DELIVERY, DELIVERY_DELAY, SUBSCRIPTION, RENDERING_FAILURE]
         CloudWatchDestination:
           DimensionConfigurations: [{DimensionName: campaign, DimensionValueSource: messageTag, DefaultDimensionValue: none}]
   FirehoseDestination:
@@ -206,7 +209,7 @@ Resources:
       EventDestination:
         Name: firehose
         Enabled: true
-        MatchingEventTypes: [send, reject, bounce, complaint, delivery, deliveryDelay, subscription, renderingFailure]
+        MatchingEventTypes: [SEND, REJECT, BOUNCE, COMPLAINT, DELIVERY, DELIVERY_DELAY, SUBSCRIPTION, RENDERING_FAILURE]
         KinesisFirehoseDestination: {IAMRoleARN: !GetAtt SesFirehoseRole.Arn, DeliveryStreamARN: !GetAtt EventStream.Arn}
   FirehoseRole:
     Type: AWS::IAM::Role
@@ -260,9 +263,6 @@ Resources:
         ErrorOutputPrefix: 'errors/!{firehose:error-output-type}/!{timestamp:yyyy/MM/dd}/'
         CompressionFormat: GZIP
         BufferingHints: {IntervalInSeconds: 300, SizeInMBs: 5}
-        ProcessingConfiguration:
-          Enabled: true
-          Processors: [{Type: AppendDelimiterToRecord}]
   EventsDatabase:
     Type: AWS::Glue::Database
     Properties:
@@ -754,8 +754,6 @@ Resources:
           - Effect: Allow
             Action: ['s3:ListBucket']
             Resource: !GetAtt DataBucket.Arn
-            Condition:
-              StringLike: {'s3:prefix': ['imports/report/*', 'results/*', 'recipients/*', 'delivery-checks/*']}
           - Effect: Allow
             Action: ['s3:GetObject']
             Resource: [!Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/delivery-checks/*', !Sub '${DataBucket.Arn}/imports/report/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/allowlists/*']
@@ -825,6 +823,9 @@ Resources:
             Action: ['ses:GetEmailIdentity', 'ses:GetConfigurationSet', 'ses:GetConfigurationSetEventDestinations', 'ses:GetContactList', 'ses:ListContacts']
             Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/ht2-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/ht2', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/ht2-c-*']
           - Effect: Allow
+            Action: ['ses:GetContact', 'ses:DeleteContact']
+            Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/ht2'
+          - Effect: Allow
             Action: ['ses:SendEmail']
             Resource: [!If [IsProd, !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*'], !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/ht2-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/ht2', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/ht2-c-*']
             Condition:
@@ -838,8 +839,6 @@ Resources:
           - Effect: Allow
             Action: ['s3:ListBucket']
             Resource: !GetAtt DataBucket.Arn
-            Condition:
-              StringLike: {'s3:prefix': ['imports/staging/*', 'imports/ready/*', 'imports/report/*', 'recipients/*', 'results/*', 'backups/contacts/*', 'delivery-checks/*']}
           - Effect: Allow
             Action: ['s3:GetObject']
             Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*', !Sub '${DataBucket.Arn}/delivery-checks/*', !Sub '${DataBucket.Arn}/allowlists/*']
@@ -908,7 +907,7 @@ Resources:
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
-      TreatMissingData: missing
+      TreatMissingData: ignore
       Namespace: AWS/SES
       MetricName: Reputation.BounceRate
       Statistic: Maximum
@@ -922,7 +921,7 @@ Resources:
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
-      TreatMissingData: missing
+      TreatMissingData: ignore
       Namespace: AWS/SES
       MetricName: Reputation.ComplaintRate
       Statistic: Maximum
@@ -1281,13 +1280,39 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       EvaluationPeriods: 1
       TreatMissingData: missing
+  SystemPauseReason12Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'ht2-${Env}-paused-lock-wait-timeout'
+      Namespace: !Sub 'HT2/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: LOCK_WAIT_TIMEOUT}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason13Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'ht2-${Env}-paused-auth-check-stale'
+      Namespace: !Sub 'HT2/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: AUTH_CHECK_STALE}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
   PausedBySystemAlarm:
     Type: AWS::CloudWatch::CompositeAlarm
     Properties:
       AlarmName: !Sub 'ht2-${Env}-paused-by-system'
       AlarmActions: [!Ref AlertTopic]
       AlarmRule: !Sub
-        - 'ALARM("${A0}") OR ALARM("${A1}") OR ALARM("${A2}") OR ALARM("${A3}") OR ALARM("${A4}") OR ALARM("${A5}") OR ALARM("${A6}") OR ALARM("${A7}") OR ALARM("${A8}") OR ALARM("${A9}") OR ALARM("${A10}") OR ALARM("${A11}")'
+        - 'ALARM("${A0}") OR ALARM("${A1}") OR ALARM("${A2}") OR ALARM("${A3}") OR ALARM("${A4}") OR ALARM("${A5}") OR ALARM("${A6}") OR ALARM("${A7}") OR ALARM("${A8}") OR ALARM("${A9}") OR ALARM("${A10}") OR ALARM("${A11}") OR ALARM("${A12}") OR ALARM("${A13}")'
         - A0: !Ref SystemPauseReason0Alarm
           A1: !Ref SystemPauseReason1Alarm
           A2: !Ref SystemPauseReason2Alarm
@@ -1300,6 +1325,8 @@ Resources:
           A9: !Ref SystemPauseReason9Alarm
           A10: !Ref SystemPauseReason10Alarm
           A11: !Ref SystemPauseReason11Alarm
+          A12: !Ref SystemPauseReason12Alarm
+          A13: !Ref SystemPauseReason13Alarm
 Outputs:
   Environment:
     Value: !Ref Env

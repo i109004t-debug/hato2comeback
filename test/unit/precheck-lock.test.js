@@ -29,13 +29,13 @@ const failures = [
   ['DKIM', (f) => { f.identity.DkimAttributes.CurrentSigningKeyLength = 'RSA_1024_BIT'; }, 'AUTH_CHECK_FAILED'],
   ['MAIL FROM', (f) => { f.identity.MailFromAttributes.BehaviorOnMxFailure = 'USE_DEFAULT_VALUE'; }, 'AUTH_CHECK_FAILED'],
   ['TLS', (f) => { f.configuration.DeliveryOptions.TlsPolicy = 'OPTIONAL'; }, 'CONFIGURATION_INVALID'],
-  ['設定セット抑止上書き', (f) => { f.configuration.SuppressionOptions = {}; }, 'CONFIGURATION_INVALID'],
+  ['設定セット抑止上書き', (f) => { f.configuration.SuppressionOptions = { SuppressedReasons: ['BOUNCE'] }; }, 'CONFIGURATION_INVALID'],
   ['イベント無効', (f) => { f.destinations.EventDestinations[1].Enabled = false; }, 'EVENT_DESTINATION_DISABLED'],
   ['イベント不足', (f) => { f.destinations.EventDestinations[0].MatchingEventTypes = ['SEND']; }, 'EVENT_DESTINATION_DISABLED'],
   ['次元違い', (f) => { f.destinations.EventDestinations[0].CloudWatchDestination.DimensionConfigurations[0].DefaultDimensionValue = 'other'; }, 'EVENT_DESTINATION_DISABLED'],
   ['DNS期限切れ', (f) => { f.auth.checked_at = new Date(f.deps.now() - 26 * 3600000 - 1).toISOString(); f.ddb.set(f.auth); }, 'AUTH_CHECK_FAILED'],
   ['DNS取得不明', (f) => { f.auth.status = 'UNKNOWN'; f.ddb.set(f.auth); }, 'AUTH_CHECK_FAILED'],
-  ['設定版違い', (f) => { f.auth.config_hash = 'a'.repeat(64); f.ddb.set(f.auth); }, 'AUTH_CHECK_FAILED'],
+  ['設定版違い', (f) => { f.auth.config_hash = 'a'.repeat(64); f.ddb.set(f.auth); }, 'AUTH_CHECK_STALE'],
   ['受入記録なし', (f) => { delete f.org.delivery_check; f.ddb.set(f.org); }, 'DELIVERY_CHECK_REQUIRED'],
   ['受入記録期限切れ', (f) => { f.org.delivery_check.passed_at = new Date(f.deps.now() - 91 * 86400000).toISOString(); f.ddb.set(f.org); }, 'DELIVERY_CHECK_REQUIRED'],
   ['DNSハッシュ変更', (f) => { f.auth.dns_config_hash = 'a'.repeat(64); f.ddb.set(f.auth); }, 'DELIVERY_CHECK_REQUIRED'],
@@ -77,6 +77,7 @@ test('7.1 状態競合と予約設定時だけのSES枠不足警告', async () =
 });
 
 test('7.8 個別検査理由をpause_reasonに対応させる', () => {
+  for (const code of ['AUTH_CHECK_STALE', 'LOCK_WAIT_TIMEOUT']) assert.equal(pauseReason(code), code);
   for (const code of ['AUTH_CHECK_FAILED', 'SUPPRESSION_MISCONFIGURED', 'CONFIGURATION_INVALID', 'DELIVERY_CHECK_REQUIRED']) assert.equal(pauseReason(code), 'AUTH_CHECK');
   for (const code of ['EVENT_DESTINATION_DISABLED', 'MONITORING_UNAVAILABLE']) assert.equal(pauseReason(code), 'MONITORING_UNAVAILABLE');
   assert.equal(pauseReason('EVENT_LOG_STALE'), 'EVENT_LOG_STALE');

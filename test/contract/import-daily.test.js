@@ -46,7 +46,7 @@ test('T-16 CSV内の停止済み既存宛先は除外し、既存の解除操作
   const { id } = await runImport(f, f.importCsv(f.addresses[0], 'new@example.com,新規,2026-01-01T00:00:00Z,フォーム,news\n'));
   const report = JSON.parse(f.files.get(`imports/report/${id}.json`));
   assert.deepEqual(report.rows, [{ row: 2, code: 'EXISTING_SKIPPED' }]);
-  assert.ok(!f.files.get(`imports/ready/${id}.csv`).includes(f.addresses[0]));
+  assert.ok(!f.files.get(`imports/ready/${id}.jsonl`).includes(f.addresses[0]));
   assert.equal(f.contacts[0].UnsubscribeAll, true); assert.equal(f.changes.length, 0);
   assert.equal((await f.request('POST /contacts/unsubscribe', { email: f.addresses[1], scope: 'ALL' })).statusCode, 200);
   assert.equal((await f.request('POST /contacts/get', { email: f.addresses[1] })).json.UnsubscribeAll, true); assert.equal(f.ddb.get('LOCK', 'CONTACT_CREATE').owner, id);
@@ -61,19 +61,21 @@ test('T-17 完全削除のHMACはBatchGetItemで照合しCSVから除外', async
   assert.equal(f.ddb.get('LOCK', 'CONTACT_CREATE').owner, undefined);
 });
 
-test('T-18 Gmail別表記のCSVは一件だけ、全トピックの列を出す', async () => {
+test('T-18 Gmail別表記のCSVは一件だけ、SES JSON Linesで全トピックを出す', async () => {
   const f = managementFixture(); f.settings.nonprod_allowlist.push('ta@gmail.com');
   const { id } = await runImport(f, f.importCsv('T.a+fc@googlemail.com', 'ta@gmail.com,同一,2026-01-01T00:00:00Z,フォーム,event\n'));
-  const csv = f.files.get(`imports/ready/${id}.csv`);
-  assert.ok(csv.includes('topicPreferences.news,topicPreferences.event'));
-  assert.ok(csv.includes('ta@gmail.com,false')); assert.ok(csv.endsWith('OPT_IN,OPT_OUT\n'));
-  assert.equal(csv.match(/ta@gmail.com,false/g).length, 1);
+  const rows = f.files.get(`imports/ready/${id}.jsonl`).trimEnd().split('\n').map(JSON.parse);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].emailAddress, 'ta@gmail.com');
+  assert.equal(rows[0].unsubscribeAll, false);
+  assert.deepEqual(rows[0].topicPreferences, [{ topicName: 'news', subscriptionStatus: 'OPT_IN' }, { topicName: 'event', subscriptionStatus: 'OPT_OUT' }]);
   const report = JSON.parse(f.files.get(`imports/report/${id}.json`));
   assert.deepEqual(report.rows, [{ row: 3, code: 'DUPLICATE_IN_FILE' }]);
   assert.ok(!JSON.stringify(report).includes('@'));
   const job = [...f.jobs.values()][0];
   assert.equal(job.input.ImportDestination.ContactListDestination.ContactListImportAction, 'PUT');
-  assert.equal(job.input.ImportDataSource.S3Url, `s3://data/imports/ready/${id}.csv`);
+  assert.equal(job.input.ImportDataSource.S3Url, `s3://data/imports/ready/${id}.jsonl`);
+  assert.equal(job.input.ImportDataSource.DataFormat, 'JSON');
 });
 
 test('T-21 許可リスト外CSVはNOT_ALLOWED_IN_ENVで除外', async () => {
