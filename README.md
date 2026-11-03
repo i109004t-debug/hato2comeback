@@ -90,9 +90,9 @@ HT2 がどんなもので、どう使うのかは、**[HT2 ご利用案内](docs
 
 | 確かめたこと | 方法 | 結果 |
 |---|---|---|
-| プログラムの動き | 自動テスト（`node --test test/`）。AWS の部分は偽物に差し替えて実行 | 773件すべて合格 |
+| プログラムの動き | 自動テスト（`node --test test/`）。AWS の部分は偽物に差し替えて実行 | 857件すべて合格 |
 | AWS の構成定義 | CloudFormation のテンプレートの全リソース（メイン102、エッジ2）を、AWS が公開しているリソース仕様と照合 | 型、プロパティ名、必須項目、参照先に問題なし。指摘は、`cloudformation package` が置き換える手元のパス5か所だけで、想定どおり |
-| AWS の API の使い方 | プログラムから AWS を呼ぶ126か所と、手順書・スクリプトの AWS CLI のコマンド151件を、AWS の API 定義（botocore のモデル）と照合 | 項目名、操作名、オプション名が一致。指摘は既知の誤検出1件だけ（AWS CLI が独自に足している `cloudfront create-invalidation --paths`） |
+| AWS の API の使い方 | プログラムから AWS を呼ぶ129か所と、手順書・スクリプトの AWS CLI のコマンド182件を、AWS の API 定義（botocore のモデル）と照合 | 項目名、操作名、オプション名が一致。指摘は既知の誤検出1件だけ（AWS CLI が独自に足している `cloudfront create-invalidation --paths`）。`aws logs tail` も AWS CLI 独自のコマンドなので、照合の対象から外した |
 | AWS の仕様の前提 | Step Functions、EventBridge Scheduler、Lambda、CloudWatch、SES、Cognito、API Gateway、CloudFront、WAF について、実装が前提にしている仕様を AWS の公式ドキュメントと照合 | 食い違いが見つかった箇所は修正済み |
 | 新しい仕組みの前提 | v2.3 で加えた仕組みが前提にしている仕様を、AWS の公式ドキュメントと照合。DynamoDB Streams で TTL による削除を見分ける方法、KMS の HMAC の呼び出しの上限（東京リージョンの対称鍵の操作で毎秒20,000件、ほかの操作と共有）、Lambda の実行環境をデプロイのときだけ更新する設定（FunctionUpdate）、SES から EventBridge の既定のイベントバスへの配信がベストエフォートであること、Cognito のアクセストークンの `auth_time` | これらの仕様に合わせて、設計と実装を決めた。たとえば、EventBridge への配信はベストエフォートなので、宛先ごとの配送の記録に見つからないことを、届かなかった証拠にしない |
 | 手順書の使いやすさ | AWS を使ったことのない運営者のつもりで、手順書を最初から最後まで読み通し、コマンドや名前を実物と突き合わせた | つまずく箇所を修正済み |
