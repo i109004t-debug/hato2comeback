@@ -147,8 +147,32 @@ async function startExecution(runtime, campaign, name, resume) {
   const input = { campaign_id: campaign.campaign_id, ...(resume === undefined ? {} : { resume }) };
   try { return await runtime.sfn.startExecution({ stateMachineArn: runtime.stateMachineArn, name, input: JSON.stringify(input) }); } catch (error) {
     if (error.name !== 'ExecutionAlreadyExists') throw error;
-    return { already_started: true };
+    throw new AppError('STATE_CONFLICT', 409, '同名の実行が存在するため開始できません。実行結果を確認してください。');
   }
+}
+
+function executionArn(runtime, name) {
+  return `${runtime.stateMachineArn.replace(':stateMachine:', ':execution:')}:${name}`;
+}
+
+async function nextStart(runtime, campaign) {
+  const previous = campaign.start_attempt ?? 0;
+  if (!Number.isSafeInteger(previous) || previous < 0 || previous >= Number.MAX_SAFE_INTEGER) throw new AppError('STATE_CONFLICT', 409, '開始回数を確認できません。');
+  if (campaign.started_at || Object.values(campaign.counts ?? {}).some((count) => count > 0) || campaign.progress?.chunk > 0 || campaign.progress?.index > 0) throw new AppError('STATE_CONFLICT', 409, '送信履歴があるため新しい配信として開始できません。');
+  if (campaign.start_error) {
+    const name = campaign.start_execution_name ?? campaign.campaign_id;
+    let completed;
+    try { completed = await runtime.sfn.describeExecution({ executionArn: executionArn(runtime, name) }); } catch {
+      throw new AppError('STATE_CONFLICT', 409, '前回の開始処理の終了を確認できません。');
+    }
+    let input;
+    let output;
+    try { input = JSON.parse(completed.input); output = JSON.parse(completed.output); } catch { /* 終了と未送信を確認できなければ再投入しない。 */ }
+    if (completed.status !== 'SUCCEEDED' || input?.campaign_id !== campaign.campaign_id || output?.campaign_id !== campaign.campaign_id || output?.result?.action !== 'START_FAILED') throw new AppError('STATE_CONFLICT', 409, '前回の開始処理の終了と未送信を確認できません。');
+  }
+  const start_attempt = Math.max(previous, campaign.start_error || campaign.start_mode ? 1 : 0) + 1;
+  const start_execution_name = start_attempt === 1 ? campaign.campaign_id : `${campaign.campaign_id}-s${start_attempt}`;
+  return { start_attempt, start_execution_name, execution_arn: executionArn(runtime, start_execution_name) };
 }
 
 async function start(ctx) {
@@ -156,18 +180,19 @@ async function start(ctx) {
   let campaign = await load(ctx);
   assertStatus(campaign, ['APPROVED']);
   const health = await check(ctx, campaign, { scheduling: body.mode === 'SCHEDULED' });
+  const attempt = await nextStart(runtime, campaign);
   if (body.mode === 'NOW') {
-    campaign = await updateCampaign(runtime, campaign, ['APPROVED'], { status: 'QUEUED', start_mode: 'NOW', started_by: user.sub, start_error: '' });
-    await startExecution(runtime, campaign, campaign.campaign_id);
+    campaign = await updateCampaign(runtime, campaign, ['APPROVED'], { ...attempt, status: 'QUEUED', start_mode: 'NOW', started_by: user.sub, start_error: '' });
+    await startExecution(runtime, campaign, campaign.start_execution_name);
     return clean(campaign);
   }
-  const schedule_name = `pl-${campaign.campaign_id}`;
-  campaign = await updateCampaign(runtime, campaign, ['APPROVED'], { status: 'SCHEDULED', start_mode: 'SCHEDULED', scheduled_at: new Date(body.at).toISOString(), schedule_name, started_by: user.sub });
+  const schedule_name = `pl-${attempt.start_execution_name}`;
+  campaign = await updateCampaign(runtime, campaign, ['APPROVED'], { ...attempt, status: 'SCHEDULED', start_mode: 'SCHEDULED', scheduled_at: new Date(body.at).toISOString(), schedule_name, started_by: user.sub, start_error: '' });
   const local = new Date(Date.parse(body.at) + 9 * 3600000).toISOString().slice(0, 19);
   const input = {
     Name: schedule_name, GroupName: runtime.scheduleGroup, ScheduleExpression: `at(${local})`, ScheduleExpressionTimezone: 'Asia/Tokyo',
     FlexibleTimeWindow: { Mode: 'OFF' }, ActionAfterCompletion: 'DELETE',
-    Target: { Arn: 'arn:aws:scheduler:::aws-sdk:sfn:startExecution', RoleArn: runtime.schedulerRoleArn, RetryPolicy: { MaximumRetryAttempts: 0 }, Input: JSON.stringify({ StateMachineArn: runtime.stateMachineArn, Name: campaign.campaign_id, Input: JSON.stringify({ campaign_id: campaign.campaign_id }) }) },
+    Target: { Arn: 'arn:aws:scheduler:::aws-sdk:sfn:startExecution', RoleArn: runtime.schedulerRoleArn, RetryPolicy: { MaximumRetryAttempts: 0 }, Input: JSON.stringify({ StateMachineArn: runtime.stateMachineArn, Name: campaign.start_execution_name, Input: JSON.stringify({ campaign_id: campaign.campaign_id }) }) },
   };
   try { await runtime.scheduler.createSchedule(input); } catch (error) {
     if (error.name !== 'ConflictException') throw error;
@@ -259,6 +284,11 @@ async function review(ctx) {
 
 async function testSend(ctx) {
   const { runtime } = ctx;
+  const recovery = ctx.body.purpose === 'ACCEPTANCE_RECOVERY';
+  if (recovery) {
+    if (!ctx.user.roles.includes('admin')) throw new AppError('FORBIDDEN', 403, '受入確認の復旧テストは管理者だけが実行できます。');
+    if (!ctx.body.note?.trim()) throw invalid('note', 'REMEDIATION_REQUIRED');
+  }
   let campaign = await load(ctx);
   assertStatus(campaign, ['DRAFT', 'PENDING_APPROVAL', 'APPROVED']);
   const org = await runtime.store.get('SETTINGS', 'ORG');
@@ -271,13 +301,15 @@ async function testSend(ctx) {
     try { contact = await runtime.ses.getContact({ ContactListName: runtime.contactList, EmailAddress: email }); } catch (error) { if (error.name !== 'NotFoundException') throw error; }
     if (!contact || contact.UnsubscribeAll || !contact.TopicPreferences?.some((entry) => entry.TopicName === campaign.topic && entry.SubscriptionStatus === 'OPT_IN')) throw new AppError('TEST_RECIPIENT_NOT_REGISTERED', 422, 'テスト送信先の登録と購読を確認してください。');
   }
-  const health = await check(ctx, campaign, { test: true, remaining: recipients.length });
+  if (recovery) await ctx.audit('ACCEPTANCE_RECOVERY_TEST', campaign.campaign_id, { purpose: ctx.body.purpose, note: ctx.body.note });
+  const health = await check(ctx, campaign, { test: true, acceptanceRecovery: recovery, remaining: recipients.length });
   const f = campaign.status === 'DRAFT' ? await fixed(runtime, campaign) : undefined;
   const owner = `test:${ctx.requestId}`;
   const held = await runtime.lock.acquire(owner, config.lock_ttl_seconds);
   if (!held) throw new AppError('SENDING_IN_PROGRESS', 409, '別の配信が送信中です。');
   const limiter = { interval: 1000 / health.rate, next: Math.max(runtime.now(), held.next_send_at_ms ?? 0), ...(Number.isFinite(held.last_send_at_ms) ? { lastStart: held.last_send_at_ms } : {}) };
-  const sender = createSender({ ...runtime, health });
+  const precheck = recovery ? { ...runtime.precheck, run: (options) => runtime.precheck.run({ ...options, acceptanceRecovery: options.test === true }) } : runtime.precheck;
+  const sender = createSender({ ...runtime, precheck, health });
   const results = [];
   let stop = false;
   try {
@@ -291,7 +323,7 @@ async function testSend(ctx) {
       results.push({ email_masked: maskEmail(email), status: ['ACCEPTED', 'UNKNOWN', 'FAILED'].includes(result.type) ? result.type : 'NOT_ATTEMPTED', ...(result.code ? { code: result.code } : {}) });
       stop = !['ACCEPTED', 'FAILED'].includes(result.type);
     }
-    await ctx.audit('TEST_SEND', campaign.campaign_id, { results });
+    await ctx.audit('TEST_SEND', campaign.campaign_id, { results, ...(recovery ? { purpose: ctx.body.purpose } : {}) });
     return { results };
   } finally { await runtime.lock.release(owner, limiter); }
 }

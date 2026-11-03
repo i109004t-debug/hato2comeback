@@ -49,7 +49,7 @@ test('T-16 CSV内の停止済み既存宛先は除外し、既存の解除操作
   assert.ok(!f.files.get(`imports/ready/${id}.csv`).includes(f.addresses[0]));
   assert.equal(f.contacts[0].UnsubscribeAll, true); assert.equal(f.changes.length, 0);
   assert.equal((await f.request('POST /contacts/unsubscribe', { email: f.addresses[1], scope: 'ALL' })).statusCode, 200);
-  assert.equal(f.contacts[1].UnsubscribeAll, true); assert.equal(f.ddb.get('LOCK', 'CONTACT_CREATE').owner, id);
+  assert.equal((await f.request('POST /contacts/get', { email: f.addresses[1] })).json.UnsubscribeAll, true); assert.equal(f.ddb.get('LOCK', 'CONTACT_CREATE').owner, id);
 });
 
 test('T-17 完全削除のHMACはBatchGetItemで照合しCSVから除外', async () => {
@@ -117,7 +117,7 @@ test('5.4 未処理のHMACキーを一致なしとして登録しない', async 
   assert.equal(f.jobs.size, 0);
 });
 
-test('5.4 HMAC照合は100件ずつ、既存宛先は最後のページまで除外', async () => {
+test('5.4 完全削除と属性正本は100キー以内で照合し、既存宛先は最後のページまで除外', async () => {
   const f = managementFixture({ env: 'prod', count: 0 });
   const lines = Array.from({ length: 205 }, (_, i) => `u${i}@example.com,会員,2026-01-01T00:00:00Z,フォーム,news`).join('\n');
   let batchCalls = 0;
@@ -125,7 +125,7 @@ test('5.4 HMAC照合は100件ずつ、既存宛先は最後のページまで除
   f.ddb.batchGetItem = async (input) => { batchCalls += 1; return original(input); };
   f.contactPages = [{ Contacts: [{ EmailAddress: 'u0@example.com' }], NextToken: '1' }, { Contacts: [{ EmailAddress: 'u204@example.com', UnsubscribeAll: true }] }];
   const { id } = await runImport(f, 'email,name,consent_at,consent_source,topics\n' + lines + '\n');
-  assert.equal(batchCalls, 3); assert.equal(f.listInputs.length, 2);
+  assert.equal(batchCalls, 5); assert.equal(f.listInputs.length, 2);
   const report = JSON.parse(f.files.get(`imports/report/${id}.json`));
   assert.equal(report.ready, 203); assert.equal(report.rows.length, 2);
   assert.ok(report.rows.every((row) => row.code === 'EXISTING_SKIPPED'));

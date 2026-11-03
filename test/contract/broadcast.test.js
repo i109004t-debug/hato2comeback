@@ -26,7 +26,7 @@ test('7.2 ASLは正しいJSON、全状態が到達可能でNext/Endと分岐が�
   assert.equal(states.WaitDay.SecondsPath, '$.result.wait_seconds');
   assert.equal(states.WaitLock.Seconds, 300); assert.equal(states.Throttled.Seconds, 60);
   assert.equal(states.WaitForResume.TimeoutSeconds, 7 * 86400);
-  assert.equal(states.WaitForResume.Resource, 'arn:aws:states:::dynamodb:updateItem.waitForTaskToken');
+  assert.equal(states.WaitForResume.Resource, 'arn:aws:states:::aws-sdk:dynamodb:updateItem.waitForTaskToken');
   assert.equal(states.WaitForResume.Parameters.TableName, '${TableName}');
   for (const state of Object.values(states)) {
     if (state.Resource === '${WorkerFunctionArn}') {
@@ -57,7 +57,7 @@ test('T-08 一時停止後の新規送信は20件以内、未保存受付数も�
 });
 
 test('T-09 再開トークン保存の競合はSendBatchへ進み、新状態から継続', async () => {
-  const caught = definition.States.WaitForResume.Catch.find((entry) => entry.ErrorEquals.includes('DynamoDB.ConditionalCheckFailedException'));
+  const caught = definition.States.WaitForResume.Catch.find((entry) => entry.ErrorEquals.includes('DynamoDb.ConditionalCheckFailedException'));
   assert.equal(caught.Next, 'SendBatch');
   const f = fixture({ count: 2 }); await f.prepare();
   f.setCampaign({ status: 'PAUSED', pause_reason: 'USER' });

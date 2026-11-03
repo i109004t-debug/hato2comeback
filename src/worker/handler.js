@@ -15,6 +15,7 @@ import { send } from './modes/send.js';
 import { finish } from './modes/finish.js';
 import { importContacts } from './modes/import.js';
 import { daily } from './modes/daily.js';
+import { backfillContacts } from './modes/contact-backfill.js';
 import { createContactLock } from '../common/contact-lock.js';
 
 export function createHandler(deps = {}) {
@@ -51,7 +52,8 @@ export function createHandler(deps = {}) {
   return async (event, context = {}) => {
     const logger = deps.logger ?? createLogger({ fn: 'worker', req_id: context.awsRequestId, now: base.now });
     try {
-      if (!event || !['prepare', 'send', 'finish', 'import', 'daily'].includes(event.mode)) throw invalid('mode');
+      if (!event || !['prepare', 'send', 'finish', 'import', 'daily', 'contact-backfill'].includes(event.mode)) throw invalid('mode');
+      if (event.mode === 'contact-backfill') return await backfillContacts(event, initialize(context), context);
       if (event.mode === 'daily') return await daily(event, initialize(context), context);
       if (event.mode === 'import') {
         if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(event.import_id ?? '')) throw invalid('import_id');

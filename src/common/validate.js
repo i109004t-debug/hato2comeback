@@ -106,7 +106,7 @@ export const routeSchemas = Object.freeze({
   'campaigns.get': empty,
   'campaigns.update': record({ version, ...draft }, ['version']),
   'campaigns.preview': empty,
-  'campaigns.test-send': empty,
+  'campaigns.test-send': record({ purpose: enumeration('ACCEPTANCE_RECOVERY'), note }, []),
   'campaigns.submit': empty,
   'campaigns.approve': record({ content_sha256: hash }),
   'campaigns.reject': record({ reason: note }),
@@ -200,6 +200,7 @@ export function validateRoute(route, input, context = {}) {
   if (route === 'settings.update') return validateSettings(input, context);
   const value = assertResult(validateSchema(routeSchemas[route], input, context));
   if (route === 'contacts.create') Object.assign(value, normalizeEmail(input.email));
+  if (route === 'campaigns.test-send' && (Object.hasOwn(value, 'purpose') !== Object.hasOwn(value, 'note'))) throw invalid('note', 'REQUIRED');
   if (route === 'imports.create' && Buffer.byteLength(value) > 2 * 1024 * 1024) throw new AppError('PAYLOAD_TOO_LARGE', 413, 'CSVが大きすぎます。');
   if (route === 'contacts.update' && !Object.hasOwn(value, 'name') && !Object.hasOwn(value, 'topics')) throw invalid('body', 'EMPTY_UPDATE');
   if (route === 'campaigns.update' && !Object.keys(draft).some((field) => Object.hasOwn(value, field))) throw invalid('body', 'EMPTY_UPDATE');

@@ -3,13 +3,10 @@ import { normalizeEmail, maskEmail } from '../../common/email.js';
 import { requiresEmailMask } from '../../common/authz.js';
 import { decodeSesCursor, encodeSesCursor } from '../../common/ddb.js';
 import { addressHash } from '../../common/log.js';
-import { timestamp } from '../../common/records.js';
+import { timestamp, updateRecord } from '../../common/records.js';
+import { contactAttributes, getContactMetadata, ensureContactMetadata, applyContactMetadata, eraseContactMetadata } from '../../common/contact-metadata.js';
 
-export function attributes(contact) {
-  const result = JSON.parse(contact.AttributesData || '{}');
-  if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('Invalid contact attributes');
-  return result;
-}
+export const attributes = contactAttributes;
 
 function serialize(value) {
   const result = JSON.stringify(value);
@@ -37,13 +34,24 @@ async function load(runtime, email) {
 async function list({ runtime, user, query, topics }) {
   if (query.topic && !topics.includes(query.topic)) throw invalid('topic', 'UNKNOWN_TOPIC');
   const token = decodeSesCursor(query.cursor);
-  const filter = { ...(query.status ? { FilteredStatus: query.status } : {}), ...(query.topic ? { TopicFilter: { TopicName: query.topic, UseDefaultIfPreferenceUnavailable: true } } : {}) };
+  // ローカル停止はSESのOPT_OUT検索には現れないため、停止検索ではSES側の絞込みをしない。
+  const filter = { ...(query.status === 'OPT_IN' ? { FilteredStatus: query.status } : {}), ...(query.topic ? { TopicFilter: { TopicName: query.topic, UseDefaultIfPreferenceUnavailable: true } } : {}) };
   const page = await runtime.ses.listContacts({ ContactListName: runtime.contactList, PageSize: query.limit, ...(Object.keys(filter).length ? { Filter: filter } : {}), ...(token ? { NextToken: token } : {}) });
-  return { items: (page.Contacts ?? []).map((item) => visible(item, user)), cursor: encodeSesCursor(page.NextToken) };
+  const items = [];
+  for (const item of page.Contacts ?? []) {
+    const metadata = await getContactMetadata(runtime, item.EmailAddress);
+    if (metadata?.erased) continue;
+    const effective = applyContactMetadata(item, metadata);
+    const status = effective.UnsubscribeAll ? 'OPT_OUT' : query.topic ? effective.TopicPreferences?.find((entry) => entry.TopicName === query.topic)?.SubscriptionStatus ?? 'OPT_OUT' : 'OPT_IN';
+    if (query.status && status && status !== query.status) continue;
+    items.push(visible(effective, user));
+  }
+  return { items, cursor: encodeSesCursor(page.NextToken) };
 }
 
 async function get({ runtime, user, body }) {
-  const contact = await load(runtime, body.email);
+  const loaded = await load(runtime, body.email);
+  const contact = applyContactMetadata(loaded, await ensureContactMetadata(runtime, { ...loaded, EmailAddress: body.email }));
   let suppression = null;
   try {
     const result = await runtime.ses.getSuppressedDestination({ EmailAddress: body.email });
@@ -66,14 +74,23 @@ async function create({ runtime, user, body, audit, requestId }) {
       await runtime.ses.getContact({ ContactListName: runtime.contactList, EmailAddress: body.email });
       throw new AppError('CONTACT_EXISTS', 409, '連絡先は既に登録されています。');
     } catch (error) { if (error.name !== 'NotFoundException') throw error; }
+    if (await getContactMetadata(runtime, body.email)) throw new AppError('CONTACT_EXISTS', 409, '連絡先の保存済み記録があります。管理者が状態を確認してください。');
     const attrs = { v: 1, ...(body.name ? { name: body.name } : {}), consent: body.consent, origin: `manual:${user.sub}`, ...(body.orig ? { orig: body.orig } : {}) };
     const input = { ContactListName: runtime.contactList, EmailAddress: body.email, UnsubscribeAll: false, TopicPreferences: body.topics.map((TopicName) => ({ TopicName, SubscriptionStatus: 'OPT_IN' })), AttributesData: serialize(attrs) };
+    const pending = await updateRecord(runtime, 'CONTACT_META', hash, undefined, { attributes: {}, pending_attributes: attrs, registration_state: 'PENDING', blocked_all: true, blocked_topics: [] });
     uncertain = true;
     try { await runtime.ses.createContact(input); } catch (error) {
-      if (error.name === 'AlreadyExistsException') { uncertain = false; throw new AppError('CONTACT_EXISTS', 409, '連絡先は既に登録されています。'); }
+      if (error.name === 'AlreadyExistsException') {
+        uncertain = false;
+        // 新規作成に失敗した入力を、既存会員の同意正本として採用しない。
+        const existing = await load(runtime, body.email);
+        await updateRecord(runtime, 'CONTACT_META', hash, pending, { attributes: attributes(existing), registration_state: 'CONFLICT', blocked_all: true }, ['pending_attributes']);
+        throw new AppError('CONTACT_EXISTS', 409, '連絡先は既に登録されています。管理者が登録競合を確認してください。');
+      }
       throw error;
     }
     uncertain = false;
+    await updateRecord(runtime, 'CONTACT_META', hash, pending, { attributes: attrs, registration_state: 'ACTIVE', blocked_all: false }, ['pending_attributes']);
     await audit('CONTACT_CREATE', 'contact', { attributes: attrs }, body.email);
     return { statusCode: 201, data: { email_masked: maskEmail(body.email), topics: Object.fromEntries(input.TopicPreferences.map((entry) => [entry.TopicName, entry.SubscriptionStatus])) } };
   } finally {
@@ -82,38 +99,48 @@ async function create({ runtime, user, body, audit, requestId }) {
 }
 
 async function change(ctx) {
-  const { runtime, body, user, route, audit } = ctx;
-  const contact = await load(runtime, body.email);
-  const attrs = attributes(contact);
+  const { runtime, body, user, route, audit, topics } = ctx;
+  const loaded = await load(runtime, body.email);
+  let metadata = await ensureContactMetadata(runtime, { ...loaded, EmailAddress: body.email });
+  const contact = applyContactMetadata(loaded, metadata);
+  // 結果不明の登録を再同意で復旧する場合は、SES実在データと今回の新しい同意だけを採用する。
+  const attrs = metadata.registration_state === 'PENDING' && route.operation === 'contacts.reconsent' ? attributes(loaded) : structuredClone(metadata.attributes);
   const preferences = new Map((contact.TopicPreferences ?? []).map((entry) => [entry.TopicName, entry.SubscriptionStatus]));
   let all = contact.UnsubscribeAll === true;
   let action = 'CONTACT_UPDATE';
-  const before = { topics: Object.fromEntries(preferences), all };
+  const before = { topics: Object.fromEntries(preferences), all, ...(metadata.registration_state ? { registration_state: metadata.registration_state } : {}) };
+  const blocked = new Set(metadata.blocked_topics ?? []);
+  let blockedAll = metadata.blocked_all === true;
   if (route.operation === 'contacts.unsubscribe') {
-    if (body.scope === 'ALL') { all = true; delete attrs.name; }
-    else preferences.set(body.scope, 'OPT_OUT');
+    if (body.scope === 'ALL') { all = true; blockedAll = true; delete attrs.name; }
+    else { preferences.set(body.scope, 'OPT_OUT'); blocked.add(body.scope); }
   } else if (route.operation === 'contacts.reconsent') {
     if (await runtime.store.get('ERASED', addressHash(body.email, runtime.hmacKey))) throw new AppError('ERASED_ADDRESS', 409, '完全削除された宛先です。');
     const prior = Math.max(Date.parse(attrs.consent?.at) || 0, Date.parse(attrs.reconsent?.at) || 0);
     if (Date.parse(body.reconsent.at) <= prior) throw invalid('reconsent.at', 'NEW_CONSENT_REQUIRED');
-    if (all) for (const topic of preferences.keys()) if (!body.topics.includes(topic)) preferences.set(topic, 'OPT_OUT');
+    // SESには条件付き更新がない。明示的に再同意されたトピック以外は必ず停止する。
+    for (const topic of new Set([...topics, ...preferences.keys()])) preferences.set(topic, 'OPT_OUT');
     all = false;
     for (const topic of body.topics) preferences.set(topic, 'OPT_IN');
     attrs.reconsent = { ...body.reconsent, by: user.sub };
+    serialize(attrs);
+    // 結果不明・同時停止の場合は、送信を止めた状態を保持する。
+    metadata = await updateRecord(runtime, 'CONTACT_META', metadata.SK, metadata, { blocked_all: true });
+    await runtime.ses.updateContact({ ContactListName: runtime.contactList, EmailAddress: body.email, UnsubscribeAll: false, TopicPreferences: [...preferences].map(([TopicName, SubscriptionStatus]) => ({ TopicName, SubscriptionStatus })), AttributesData: serialize(attrs) });
+    blockedAll = false;
+    blocked.clear();
+    for (const topic of preferences.keys()) if (!body.topics.includes(topic)) blocked.add(topic);
     action = 'RECONSENT';
   } else {
     for (const [topic, status] of Object.entries(body.topics ?? {})) {
-      if (status === 'OPT_IN' && (all || preferences.get(topic) === 'OPT_OUT')) throw new AppError('RECONSENT_REQUIRED', 409, '管理者による再同意の記録が必要です。');
-      if (status === 'OPT_IN' && !preferences.has(topic)) {
-        if (!body.consent) throw invalid('consent', 'REQUIRED');
-        attrs.consent = body.consent;
-      }
+      if (status === 'OPT_IN' && (all || preferences.get(topic) !== 'OPT_IN')) throw new AppError('RECONSENT_REQUIRED', 409, '管理者による再同意の記録が必要です。');
+      if (status === 'OPT_OUT') blocked.add(topic);
       preferences.set(topic, status);
     }
     if (Object.hasOwn(body, 'name')) attrs.name = body.name;
   }
-  const input = { ContactListName: runtime.contactList, EmailAddress: body.email, UnsubscribeAll: all, TopicPreferences: [...preferences].map(([TopicName, SubscriptionStatus]) => ({ TopicName, SubscriptionStatus })), AttributesData: serialize(attrs) };
-  await runtime.ses.updateContact(input);
+  serialize(attrs);
+  await updateRecord(runtime, 'CONTACT_META', metadata.SK, metadata, { attributes: attrs, blocked_all: blockedAll, blocked_topics: [...blocked].sort(), ...(action === 'RECONSENT' ? { registration_state: 'ACTIVE' } : {}) }, action === 'RECONSENT' ? ['pending_attributes'] : []);
   await audit(action, 'contact', { before, topics: Object.fromEntries(preferences), all, attributes: attrs, reason: body.note ?? '利用者の購読変更操作' }, body.email);
   return { email_masked: maskEmail(body.email), topics: Object.fromEntries(preferences), unsubscribe_all: all };
 }
@@ -128,6 +155,7 @@ async function erase({ runtime, body, audit, requestId }) {
     if (!existing) {
       try { await runtime.store.put({ PK: 'ERASED', SK: hash, erased_at: timestamp(runtime) }); } catch (error) { if (error.name !== 'ConditionalCheckFailedException') throw error; }
     }
+    await eraseContactMetadata(runtime, body.email);
     try { await runtime.ses.deleteContact({ ContactListName: runtime.contactList, EmailAddress: body.email }); } catch (error) { if (error.name !== 'NotFoundException') throw error; }
     await audit('ERASE', 'contact', { note: body.note }, body.email);
     return { erased: true };

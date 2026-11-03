@@ -3,6 +3,7 @@ import { addressHash } from '../../common/log.js';
 import { marshall, unmarshall } from '../../common/ddb.js';
 import { normalizeEmail } from '../../common/email.js';
 import { contactPages, objectText, updateRecord, timestamp, conflict } from '../../common/records.js';
+import { ensureContactMetadata } from '../../common/contact-metadata.js';
 
 export async function importContacts(event, runtime) {
   let record = await runtime.store.get('IMPORT', event.import_id);
@@ -23,19 +24,25 @@ export async function importContacts(event, runtime) {
     await runtime.contactLock.acquire(record.import_id);
     acquired = true;
     const erased = new Set();
-    for (let offset = 0; offset < parsed.rows.length; offset += 100) {
-      const hashes = parsed.rows.slice(offset, offset + 100).map((row) => addressHash(row.email, hmacKey));
-      const response = await runtime.ddb.batchGetItem({ RequestItems: { [runtime.tableName]: { Keys: hashes.map((SK) => marshall({ PK: 'ERASED', SK })), ConsistentRead: true } } });
+    const saved = new Set();
+    for (let offset = 0; offset < parsed.rows.length; offset += 50) {
+      const hashes = parsed.rows.slice(offset, offset + 50).map((row) => addressHash(row.email, hmacKey));
+      const response = await runtime.ddb.batchGetItem({ RequestItems: { [runtime.tableName]: { Keys: hashes.flatMap((SK) => ['ERASED', 'CONTACT_META'].map((PK) => marshall({ PK, SK }))), ConsistentRead: true } } });
       // 未処理キーがあれば一致なしとみなさず、登録前に止める。
       if (Object.values(response.UnprocessedKeys ?? {}).some((item) => item.Keys?.length)) throw new Error('Unprocessed erased keys');
-      for (const item of response.Responses?.[runtime.tableName] ?? []) erased.add(unmarshall(item).SK);
+      for (const item of response.Responses?.[runtime.tableName] ?? []) {
+        const value = unmarshall(item);
+        if (value.PK === 'ERASED' || value.erased) erased.add(value.SK);
+        else saved.add(value.SK);
+      }
     }
     const existing = new Set();
     for await (const contacts of contactPages(runtime)) for (const contact of contacts) existing.add(normalizeEmail(contact.EmailAddress).email);
     const config = await runtime.config.get();
     const rejected = [...parsed.rejected];
     const accepted = parsed.rows.filter((row) => {
-      const code = erased.has(addressHash(row.email, hmacKey)) ? 'ERASED_SKIPPED' : existing.has(row.email) ? 'EXISTING_SKIPPED' : runtime.env !== 'prod' && !config.nonprod_allowlist.includes(row.email) ? 'NOT_ALLOWED_IN_ENV' : null;
+      const hash = addressHash(row.email, hmacKey);
+      const code = erased.has(hash) ? 'ERASED_SKIPPED' : existing.has(row.email) || saved.has(hash) ? 'EXISTING_SKIPPED' : runtime.env !== 'prod' && !config.nonprod_allowlist.includes(row.email) ? 'NOT_ALLOWED_IN_ENV' : null;
       if (code) rejected.push({ row: row.row, code });
       return !code;
     });
@@ -53,6 +60,12 @@ export async function importContacts(event, runtime) {
       return { status: 'DONE' };
     }
     const readyKey = `imports/ready/${record.import_id}.csv`;
+    // SESに公開される前に、年齢によるTTLのない属性正本を保存する。
+    for (let offset = 0; offset < accepted.length; offset += 20) {
+      const results = await Promise.allSettled(accepted.slice(offset, offset + 20).map((row) => ensureContactMetadata(runtime, { EmailAddress: row.email, AttributesData: JSON.stringify(row.attributes) })));
+      const failed = results.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
+    }
     await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: readyKey, ContentType: 'text/csv; charset=utf-8', Body: writeSesImport(accepted, topics) });
     // 呼出し前に不明状態を永続化し、応答を失っても再ジョブを作らない。
     record = await updateRecord(runtime, 'IMPORT', record.import_id, record, { status: 'SUBMITTING', total: report.total, ready: report.ready });

@@ -530,6 +530,19 @@ test('13.5 連絡先の読取失敗時は更新せず、未設定属性は追加
   assert.equal(JSON.parse(read('build/dev.restore-contact.json')).AttributesData, undefined);
 });
 
+test('legacy backup export marks unknown completeness and still retrieves durable attributes; access failures stop', () => {
+  const legacy = runScript('restore-contacts.sh', ['dev', 'export', '2026-10-01', '202610'], { MOCK_MANIFEST_ERROR: '404' });
+  assert.equal(legacy.status, 0, legacy.stderr);
+  assert.deepEqual(JSON.parse(read('build/restore-dev-2026-10-01/contacts.manifest.json')), { complete: false, legacy: true, reason: 'MANIFEST_MISSING' });
+  assert.match(legacy.calls, /dynamodb query .*--consistent-read .*CONTACT_META/);
+  assert.match(legacy.calls, /dynamodb query .*ERASED/);
+  assert.doesNotMatch(legacy.calls, /create-import-job|update-contact/);
+  const denied = runScript('restore-contacts.sh', ['dev', 'export', '2026-10-01', '202610'], { MOCK_MANIFEST_ERROR: '403' });
+  assert.notEqual(denied.status, 0);
+  assert.match(denied.stderr, /Cannot read backup manifest/);
+  assert.doesNotMatch(denied.calls, /create-import-job|update-contact/);
+});
+
 test('第6段階の資料は現行の構築・画面・鍵・イベント手順と実機確認を示す', () => {
   const build = read('docs/構築手順書.md');
   const operations = read('docs/運用手順書.md');

@@ -13,6 +13,7 @@
   <header class="topbar">
     <a class="brand" href="#/send">Postline<span>ポストライン</span></a>
     <div><p id="organization"></p><p id="identity" class="muted"></p></div>
+    <a href="./help.html" target="_blank" rel="noopener">使い方</a>
     <button id="logout" type="button" hidden>ログアウト</button>
   </header>
   <nav id="navigation" aria-label="運営画面" hidden>
@@ -44,16 +45,17 @@
             <details open><summary>フッター（自動・編集できません）</summary><pre data-footer class="mail-text"></pre></details>
             <div class="actions"><button data-preview type="button">プレビュー</button><button data-test type="button">テスト送信</button><button data-save type="submit">下書き保存</button></div>
             <p data-test-reason class="hint"></p>
+            <div data-recovery-area hidden><label class="check"><input data-recovery type="checkbox">受入確認を再検証する</label><p class="hint">管理者専用。期限切れ・不合格・設定変更後の受入確認を、登録済みのテスト送信先だけでやり直します。完了後は「設定」で証跡と結果を登録してください。</p><label>再検証の理由<textarea data-recovery-note maxlength="1000" rows="2" disabled></textarea></label></div>
           </form>
           <section data-fixed hidden><h2>固定した内容の確認</h2><p data-hash class="hash"></p><h3 data-fixed-subject></h3><pre data-fixed-text class="mail-text"></pre><label class="check"><input data-confirm-content type="checkbox">固定した内容を確認しました</label></section>
         </div>
         <aside>
           <section class="panel">
             <h2>配信日時</h2>
-            <label>配信方法<select data-mode><option value="NOW">承認後すぐ</option><option value="SCHEDULED">予約</option></select></label>
+            <label>配信方法<select data-mode disabled><option value="NOW">配信開始を押したら送る</option><option value="SCHEDULED">予約</option></select></label>
             <label>予約日時（日本時間）<input data-at type="datetime-local" step="60" disabled></label>
             <p data-hour-warning class="notice" hidden>00分は受信側が混み合います。05分など、毎正時を避けてください。</p>
-            <p class="hint">予約は5分後から90日後まで。別の配信が送信中なら、その終了を待ちます。</p>
+            <p class="hint">配信日時は承認後に指定します。予約は5分後から90日後まで。別の配信が送信中なら、その終了を待ちます。</p>
             <p>差出人名や件名で、別の送り手を装わないでください。申請すると件名・本文・フッターが固定されます。</p>
             <button data-primary type="button" class="primary wide" disabled>承認申請</button><p data-primary-reason class="hint"></p>
             <div data-reject-area hidden><label>差戻しの理由<textarea data-reject-reason maxlength="1000" rows="3"></textarea></label><button data-reject type="button">差戻し</button></div>

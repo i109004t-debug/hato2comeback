@@ -1,12 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { primaryAction, controlPolicy } from '../../web/js/views/send.js';
+import { primaryAction, controlPolicy, canSchedule, testSendInput } from '../../web/js/views/send.js';
 
 const id = '01JAZ6Y0N00000000000000001';
 const hash = 'a'.repeat(64);
 const user = (role, sub = 'approver-person') => ({ sub, roles: Array.isArray(role) ? role : [role] });
 const campaign = (status, extra = {}) => ({ campaign_id: id, status, submitted_by: 'sender-person', content_sha256: hash, ...extra });
 const checked = { previewHash: hash, confirmed: true };
+
+test('schedule selection is available only when approved and recovery requires admin with reason', () => {
+  for (const state of ['DRAFT', 'PENDING_APPROVAL', 'SCHEDULED', 'QUEUED']) assert.equal(canSchedule(campaign(state), user('admin')), false);
+  assert.equal(canSchedule(campaign('APPROVED'), user('sender')), true);
+  assert.equal(canSchedule(campaign('APPROVED'), user('viewer')), false);
+  assert.equal(canSchedule(campaign('APPROVED'), user('admin'), true), false);
+  assert.deepEqual(testSendInput(user('sender'), false), {});
+  assert.throws(() => testSendInput(user('sender'), true, 'check'), { code: 'FORBIDDEN' });
+  assert.throws(() => testSendInput(user('admin'), true, ' '), { code: 'INVALID_REQUEST' });
+  assert.deepEqual(testSendInput(user('admin'), true, ' recheck '), { purpose: 'ACCEPTANCE_RECOVERY', note: 'recheck' });
+});
 
 test('UI-09 下書きは管理者・配信担当だけが保存後に申請できる', () => {
   for (const role of ['admin', 'sender']) assert.deepEqual(primaryAction(campaign('DRAFT'), user(role)), { action: 'submit', label: '承認申請', enabled: true, reason: '' });

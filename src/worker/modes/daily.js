@@ -1,11 +1,23 @@
 import * as dns from 'node:dns/promises';
-import { gzipSync } from 'node:zlib';
+import { createGzip } from 'node:zlib';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { createHash } from 'node:crypto';
 import { currentConfigHash, assertIdentity } from '../../common/acceptance.js';
 import { contactPages, allRecords, updateRecord, updateCampaign, timestamp, conflict } from '../../common/records.js';
 import { jstDate } from '../../common/time.js';
 import { reconcileImport } from '../../common/import-job.js';
 import { createMonitoring } from '../../common/monitoring.js';
+import { addressHash } from '../../common/log.js';
+import { AppError } from '../../common/http.js';
+import { ensureContactMetadata, applyContactMetadata } from '../../common/contact-metadata.js';
+import { marshall, unmarshall } from '../../common/ddb.js';
+
+function safeSesSpf(record) {
+  const terms = record.toLowerCase().split(/\s+/).slice(1);
+  const all = terms.filter((term) => /^[+?~-]?all(?:$|[:/=])/.test(term));
+  return terms.includes('include:amazonses.com') && all.length === 1 && ['~all', '-all'].includes(terms.at(-1));
+}
 
 export async function checkDns(runtime, identity) {
   const resolver = runtime.dns ?? dns;
@@ -32,7 +44,7 @@ export async function checkDns(runtime, identity) {
     if (label === 'DMARC') {
       const fields = Object.fromEntries((selected[0] ?? '').split(';').map((part) => part.trim().split(/\s*=\s*/)));
       check(label, selected.length === 1 && ['none', 'quarantine', 'reject'].includes(fields.p) && fields.aspf !== 's');
-    } else check(label, selected.length === 1 && /(?:^|\s)include:amazonses\.com(?:\s|$)/i.test(selected[0]) && /(?:^|\s)[~?-]?all$/i.test(selected[0]));
+    } else check(label, selected.length === 1 && safeSesSpf(selected[0]));
   }
   const mx = (await read('resolveMx', mail)).map((item) => `${item.priority} ${canonical(item.exchange)}`).sort();
   observed.MAIL_FROM_MX = mx;
@@ -86,18 +98,65 @@ async function backup(runtime) {
   const definition = await runtime.ses.getContactList({ ContactListName: runtime.contactList });
   const topics = definition.Topics ?? [];
   const counts = Object.fromEntries(topics.map((topic) => [topic.TopicName, 0]));
-  const lines = [];
-  for await (const contacts of contactPages(runtime)) {
-    for (const contact of contacts) {
-      const row = { EmailAddress: contact.EmailAddress, TopicPreferences: contact.TopicPreferences ?? [], UnsubscribeAll: contact.UnsubscribeAll === true, LastUpdatedTimestamp: contact.LastUpdatedTimestamp ?? null };
-      lines.push(JSON.stringify(row));
-      const preferences = new Map(row.TopicPreferences.map((item) => [item.TopicName, item.SubscriptionStatus]));
-      if (!row.UnsubscribeAll) for (const topic of topics) if ((preferences.get(topic.TopicName) ?? topic.DefaultSubscriptionStatus) === 'OPT_IN') counts[topic.TopicName] += 1;
+  const hmacKey = (await runtime.secrets.get('erase-hmac')).key;
+  let backfilled = 0;
+  let missing = 0;
+  let total = 0;
+  async function* rows() {
+    for await (const contacts of contactPages(runtime)) {
+      // 属性はSESの1ページ分だけ保持し、全会員分のMapを作らない。
+      const metadata = new Map();
+      const erased = new Set();
+      const hashes = [...new Set(contacts.map((contact) => addressHash(contact.EmailAddress, hmacKey)))];
+      for (let offset = 0; offset < hashes.length; offset += 50) {
+        const keys = hashes.slice(offset, offset + 50).flatMap((SK) => ['CONTACT_META', 'ERASED'].map((PK) => marshall({ PK, SK })));
+        const response = await runtime.ddb.batchGetItem({ RequestItems: { [runtime.tableName]: { Keys: keys, ConsistentRead: true } } });
+        if (Object.values(response.UnprocessedKeys ?? {}).some((item) => item.Keys?.length)) throw new Error('Unprocessed backup metadata keys');
+        for (const item of response.Responses?.[runtime.tableName] ?? []) {
+          const value = unmarshall(item);
+          if (value.PK === 'ERASED' || value.erased) erased.add(value.SK);
+          else metadata.set(value.SK, value);
+        }
+      }
+      for (const contact of contacts) {
+        const hash = addressHash(contact.EmailAddress, hmacKey);
+        if (erased.has(hash)) continue;
+        let saved = metadata.get(hash);
+        if (!saved && backfilled < 100) {
+          backfilled += 1;
+          try {
+            const full = await runtime.ses.getContact({ ContactListName: runtime.contactList, EmailAddress: contact.EmailAddress });
+            saved = await ensureContactMetadata(runtime, { ...full, EmailAddress: contact.EmailAddress });
+          } catch (error) {
+            if (error.code === 'ERASED_ADDRESS' || error.name === 'NotFoundException') continue;
+            // 属性の取得不能でも購読状態は残し、不完全として通知する。
+          }
+        }
+        const effective = applyContactMetadata(contact, saved);
+        const complete = saved && saved.registration_state !== 'PENDING';
+        if (!complete) missing += 1;
+        const row = { EmailAddress: effective.EmailAddress, TopicPreferences: effective.TopicPreferences ?? [], UnsubscribeAll: effective.UnsubscribeAll === true, LastUpdatedTimestamp: contact.LastUpdatedTimestamp ?? null, ...(complete ? { AttributesData: effective.AttributesData } : { PostlineMetadataStatus: 'MISSING' }) };
+        total += 1;
+        const preferences = new Map(row.TopicPreferences.map((item) => [item.TopicName, item.SubscriptionStatus]));
+        if (!row.UnsubscribeAll) for (const topic of topics) if ((preferences.get(topic.TopicName) ?? topic.DefaultSubscriptionStatus) === 'OPT_IN') counts[topic.TopicName] += 1;
+        yield JSON.stringify(row) + '\n';
+      }
     }
   }
-  await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: `backups/contacts/${jstDate(runtime.now())}.jsonl.gz`, ContentType: 'application/gzip', Body: gzipSync(lines.length ? lines.join('\n') + '\n' : '') });
+  const compressed = [];
+  await pipeline(Readable.from(rows()), createGzip(), async (source) => { for await (const chunk of source) compressed.push(chunk); });
+  const body = Buffer.concat(compressed);
+  const prefix = `backups/contacts/${jstDate(runtime.now())}`;
+  const backupStatus = { complete: missing === 0, total, attributes_missing: missing, backfilled, backed_up_at: timestamp(runtime), sha256: createHash('sha256').update(body).digest('hex'), bytes: body.length };
+  // 同日の再実行中は、前回のcomplete:trueを新しいデータに適用させない。
+  await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: `${prefix}.manifest.json`, ContentType: 'application/json', Body: JSON.stringify({ complete: false, status: 'WRITING' }) });
+  await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: `${prefix}.jsonl.gz`, ContentType: 'application/gzip', Body: body });
+  await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: `${prefix}.manifest.json`, ContentType: 'application/json', Body: JSON.stringify(backupStatus) });
+  const previousBackup = await runtime.store.get('SETTINGS', 'CONTACT_BACKUP');
+  await updateRecord(runtime, 'SETTINGS', 'CONTACT_BACKUP', previousBackup, backupStatus);
   const current = await runtime.store.get('SETTINGS', 'TOPIC_COUNTS');
-  await updateRecord(runtime, 'SETTINGS', 'TOPIC_COUNTS', current, { counts, counted_at: timestamp(runtime), total: lines.length });
+  await updateRecord(runtime, 'SETTINGS', 'TOPIC_COUNTS', current, { counts, counted_at: timestamp(runtime), total });
+  if (missing) throw new AppError('BACKUP_ATTRIBUTES_MISSING', 503, '既存連絡先の属性保存を完了してください。');
   await runtime.record('contacts', 'BACKUP', 'DONE');
 }
 

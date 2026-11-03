@@ -147,7 +147,7 @@
     },
     "WaitForResume": {
       "Type": "Task",
-      "Resource": "arn:aws:states:::dynamodb:updateItem.waitForTaskToken",
+      "Resource": "arn:aws:states:::aws-sdk:dynamodb:updateItem.waitForTaskToken",
       "Parameters": {
         "TableName": "${TableName}",
         "Key": {
@@ -194,7 +194,7 @@
       "Catch": [
         {
           "ErrorEquals": [
-            "DynamoDB.ConditionalCheckFailedException"
+            "DynamoDb.ConditionalCheckFailedException"
           ],
           "ResultPath": null,
           "Next": "SendBatch"

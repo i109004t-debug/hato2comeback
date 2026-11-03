@@ -55,7 +55,14 @@ mock_aws() {
     'lambda put-function-concurrency'|'lambda delete-function-concurrency') ;;
     'dynamodb get-item') printf '%s\n' "${MOCK_OWNER:-restore:dev}" ;;
     'dynamodb update-item') ;;
-    's3api head-object') printf '123\n' ;;
+    'dynamodb query') printf '{"Items":[]}\n' ;;
+    'sesv2 list-contacts') printf '{"Contacts":[]}\n' ;;
+    's3api head-object')
+      if [[ $args == *.manifest.json* && ${MOCK_MANIFEST_ERROR:-} != '' ]]; then
+        printf 'An error occurred (%s) when calling HeadObject\n' "$MOCK_MANIFEST_ERROR" >&2
+        return 254
+      fi
+      printf '123\n' ;;
     'sesv2 create-import-job') printf '{"JobId":"example-job"}\n' ;;
     'sesv2 get-import-job') printf '%s\n' "${MOCK_JOB_STATUS:-COMPLETED}" ;;
     'sesv2 get-contact')

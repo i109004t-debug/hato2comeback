@@ -32,6 +32,16 @@ case "${2:-}" in
     [[ $DATE =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && $MONTH =~ ^[0-9]{6}$ ]] || die 'Invalid date/month'
     DIR="build/restore-$ENV-$DATE"; mkdir -p "$DIR"
     aws s3 cp "s3://$BUCKET/backups/contacts/$DATE.jsonl.gz" "$DIR/contacts.jsonl.gz" --region "$REGION"
+    if aws_text s3api head-object --region "$REGION" --bucket "$BUCKET" --key "backups/contacts/$DATE.manifest.json" > /dev/null 2> "$DIR/manifest-error.txt"; then
+      aws s3 cp "s3://$BUCKET/backups/contacts/$DATE.manifest.json" "$DIR/contacts.manifest.json" --region "$REGION"
+    else
+      error=$(< "$DIR/manifest-error.txt")
+      [[ $error == *'(404)'* || $error == *'(NoSuchKey)'* || $error == *'(NotFound)'* ]] || die 'Cannot read backup manifest; stopped'
+      printf '{"complete":false,"legacy":true,"reason":"MANIFEST_MISSING"}\n' > "$DIR/contacts.manifest.json"
+      printf 'Legacy backup: attribute completeness is unknown. Reconcile CONTACT_META and evidence before restoring.\n' >&2
+    fi
+    aws dynamodb query --region "$REGION" --table-name "postline-$ENV" --consistent-read \
+      --key-condition-expression 'PK = :pk' --expression-attribute-values '{":pk":{"S":"CONTACT_META"}}' --output json > "$DIR/contact-metadata.json"
     aws s3 cp "s3://$BUCKET/imports/ready/" "$DIR/imports/" --recursive --region "$REGION"
     aws dynamodb query --region "$REGION" --table-name "postline-$ENV" --consistent-read \
       --key-condition-expression 'PK = :pk' --expression-attribute-values "{\":pk\":{\"S\":\"AUDIT#$MONTH\"}}" --output json > "$DIR/audit-$MONTH.json"

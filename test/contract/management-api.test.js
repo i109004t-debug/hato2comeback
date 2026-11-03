@@ -119,13 +119,14 @@ test('6.2 version競合・状態競合を拒否し、自動承認を監査', asy
   expectCode(await f.request(`PATCH ${f.campaignPath}`, { version: 2, subject: '再編集' }), 409, 'STATE_CONFLICT');
 });
 
-test('T-07 即時開始の競合でも実行は一つ、同名実行の存在を成功扱い', async () => {
+test('T-07 即時開始の競合でも実行は一つ、終了済みの同名実行を成功扱いしない', async () => {
   const f = managementFixture(); f.setCampaign({ status: 'APPROVED' });
   const responses = await Promise.all([f.request(`POST ${f.campaignPath}/start`, { mode: 'NOW' }), f.request(`POST ${f.campaignPath}/start`, { mode: 'NOW' })]);
   assert.equal(responses.filter((result) => result.statusCode === 200).length, 1); assert.equal(f.executions.size, 1);
   assert.deepEqual(JSON.parse(f.executions.get(ID).input), { campaign_id: ID });
   const g = managementFixture(); g.setCampaign({ status: 'APPROVED' }); g.executions.set(ID, {});
-  assert.equal((await g.request(`POST ${g.campaignPath}/start`, { mode: 'NOW' })).statusCode, 200);
+  expectCode(await g.request(`POST ${g.campaignPath}/start`, { mode: 'NOW' }), 409, 'STATE_CONFLICT');
+  assert.equal(g.getCampaign().status, 'QUEUED');
 });
 
 test('7.1 予約は東京時刻・無再試行・自動削除・00分の注意、取消は先にDelete', async () => {
@@ -240,12 +241,12 @@ test('7.6 SendTaskSuccessの結果不明時も再試行せず、中止用トー�
   assert.equal(f.tokens[0].failure.taskToken, 'private-task');
 });
 
-test('T-19 停止済みトピック・全停止を更新で戻さず、未設定の追加購読に同意が必要', async () => {
+test('T-19 停止済み・未設定トピックの購読は管理者による明示的な再同意が必要', async () => {
   const f = managementFixture();
   const contact = f.contacts[0]; contact.TopicPreferences = [{ TopicName: 'news', SubscriptionStatus: 'OPT_OUT' }];
   expectCode(await f.request('POST /contacts/update', { email: contact.EmailAddress, topics: { news: 'OPT_IN' } }), 409, 'RECONSENT_REQUIRED');
-  expectCode(await f.request('POST /contacts/update', { email: contact.EmailAddress, topics: { event: 'OPT_IN' } }), 400, 'INVALID_REQUEST');
-  assert.equal((await f.request('POST /contacts/update', { email: contact.EmailAddress, topics: { event: 'OPT_IN' }, consent })).statusCode, 200);
+  expectCode(await f.request('POST /contacts/update', { email: contact.EmailAddress, topics: { event: 'OPT_IN' } }), 409, 'RECONSENT_REQUIRED');
+  expectCode(await f.request('POST /contacts/update', { email: contact.EmailAddress, topics: { event: 'OPT_IN' }, consent }), 409, 'RECONSENT_REQUIRED');
   assert.equal(f.contacts[0].TopicPreferences[0].SubscriptionStatus, 'OPT_OUT');
   f.contacts[0].UnsubscribeAll = true;
   expectCode(await f.request('POST /contacts/update', { email: contact.EmailAddress, topics: { event: 'OPT_IN' }, consent }), 409, 'RECONSENT_REQUIRED');
@@ -256,7 +257,8 @@ test('T-47 全停止は名前を消し、再同意だけが全停止を解除し
   f.contacts[0].AttributesData = JSON.stringify({ v: 1, name: '会員名', consent, origin: 'manual:user' });
   f.contacts[0].TopicPreferences.push({ TopicName: 'event', SubscriptionStatus: 'OPT_OUT' });
   assert.equal((await f.request('POST /contacts/unsubscribe', { email, scope: 'ALL' })).statusCode, 200);
-  assert.equal(JSON.parse(f.contacts[0].AttributesData).name, undefined); assert.equal(f.contacts[0].UnsubscribeAll, true);
+  const stopped = await f.request('POST /contacts/get', { email });
+  assert.equal(JSON.parse(stopped.json.AttributesData).name, undefined); assert.equal(stopped.json.UnsubscribeAll, true);
   const body = { email, topics: ['news'], reconsent: { at: '2026-11-01T00:00:00Z', source: '本人の再申込' }, note: '本人の依頼を照合' };
   assert.equal((await f.request('POST /contacts/reconsent', body)).statusCode, 200);
   assert.equal(f.contacts[0].UnsubscribeAll, false); assert.equal(f.contacts[0].TopicPreferences.find((item) => item.TopicName === 'event').SubscriptionStatus, 'OPT_OUT');

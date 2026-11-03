@@ -11,7 +11,7 @@ export const DELIVERY_CASES = ['T-25', 'T-26', 'T-27', 'T-28', 'T-30', 'T-31', '
 const stable = (value) => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map((name) => [name, item[name]])) : item);
 let codeHash;
 export function sendingConfigHash(settings) {
-  codeHash ??= createHash('sha256').update(['aws.js', 'email.js', 'footer.js', 'sender.js', 'precheck.js', 'acceptance.js', '../api/routes/campaigns.js', '../worker/modes/daily.js'].map((file) => readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n')).digest('hex');
+  codeHash ??= createHash('sha256').update(['aws.js', 'config.js', 'contact-metadata.js', 'email.js', 'footer.js', 'sender.js', 'precheck.js', 'acceptance.js', '../api/routes/campaigns.js', '../worker/modes/prepare.js', '../worker/modes/daily.js'].map((file) => readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n')).digest('hex');
   return createHash('sha256').update(stable({ ...settings, codeHash })).digest('hex');
 }
 
@@ -78,7 +78,7 @@ export function createPrecheck(deps) {
         assertHealthy(auth?.status === 'PASS' && auth.domain === deps.senderDomain && auth.config_hash === configHash && /^[a-f0-9]{64}$/.test(auth.dns_config_hash ?? '') && now() - Date.parse(auth.checked_at) >= 0 && now() - Date.parse(auth.checked_at) <= config.auth_status_max_age_hours * 3600000, 'AUTH_CHECK_FAILED');
         const delivery = org.delivery_check;
         const deliveryValid = delivery?.status === 'PASS' && typeof delivery.note === 'string' && delivery.note.trim().length > 0 && delivery.config_hash === configHash && delivery.dns_config_hash === auth.dns_config_hash && now() - Date.parse(delivery.passed_at) >= 0 && now() - Date.parse(delivery.passed_at) <= config.delivery_check_max_age_days * 86400000 && DELIVERY_CASES.every((id) => delivery.cases?.[id] === 'PASS');
-        const exempt = options.test === true && delivery === undefined;
+        const exempt = options.test === true && (delivery === undefined || options.acceptanceRecovery === true);
         if (config.delivery_check_required && !exempt) {
           assertHealthy(deliveryValid, 'DELIVERY_CHECK_REQUIRED');
           assertHealthy(typeof delivery.evidence_key === 'string' && /^delivery-checks\/[^/]+\/.+/.test(delivery.evidence_key) && !delivery.evidence_key.split('/').includes('..'), 'DELIVERY_CHECK_REQUIRED');

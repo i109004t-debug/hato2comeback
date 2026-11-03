@@ -758,7 +758,7 @@ Resources:
               StringLike: {'s3:prefix': ['imports/report/*', 'results/*', 'recipients/*', 'delivery-checks/*']}
           - Effect: Allow
             Action: ['s3:GetObject']
-            Resource: [!Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/delivery-checks/*', !Sub '${DataBucket.Arn}/imports/report/*', !Sub '${DataBucket.Arn}/recipients/*']
+            Resource: [!Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/delivery-checks/*', !Sub '${DataBucket.Arn}/imports/report/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/allowlists/*']
           - Effect: Allow
             Action: ['s3:PutObject']
             Resource: [!Sub '${DataBucket.Arn}/imports/staging/*']
@@ -842,7 +842,7 @@ Resources:
               StringLike: {'s3:prefix': ['imports/staging/*', 'imports/ready/*', 'imports/report/*', 'recipients/*', 'results/*', 'backups/contacts/*', 'delivery-checks/*']}
           - Effect: Allow
             Action: ['s3:GetObject']
-            Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*', !Sub '${DataBucket.Arn}/delivery-checks/*']
+            Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*', !Sub '${DataBucket.Arn}/delivery-checks/*', !Sub '${DataBucket.Arn}/allowlists/*']
           - Effect: Allow
             Action: ['s3:PutObject']
             Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*']

@@ -4,6 +4,15 @@ import { clone, setText, on, element, fillSelect, tableRows, showMessage, previe
 const canSend = (user) => hasRole(user, 'admin', 'sender');
 const canOperate = (user) => hasRole(user, 'admin', 'sender', 'approver');
 
+export const canSchedule = (campaign, user, blocked = false) => campaign.status === 'APPROVED' && canSend(user) && !blocked;
+
+export function testSendInput(user, recovery, note = '') {
+  if (!recovery) return {};
+  if (!hasRole(user, 'admin')) throw new ApiError('FORBIDDEN', 403);
+  if (!note.trim() || [...note].length > 1000 || /[\p{Cc}\p{Cs}\p{Zl}\p{Zp}]/u.test(note)) throw new ApiError('INVALID_REQUEST', 400, '', ['再検証の理由']);
+  return { purpose: 'ACCEPTANCE_RECOVERY', note: note.trim() };
+}
+
 export function primaryAction(campaign, user, { busy = false, dirty = false, stale = false, uncertain = false, previewHash = '', confirmed = false } = {}) {
   const state = campaign?.status ?? 'DRAFT';
   const action = { DRAFT: ['submit', '承認申請'], PENDING_APPROVAL: ['approve', '承認'], APPROVED: ['start', '配信開始'] }[state];
@@ -115,6 +124,7 @@ export async function mount(ctx, id) {
     setText(root, '[data-from]', draft ? `${ctx.settings.from_name || '未設定'} <${ctx.settings.from_local || '未設定'}@${ctx.config.senderDomain}>` : campaign.from ?? '—');
     setText(root, '[data-reply]', draft ? ctx.settings.reply_to || '指定なし' : campaign.reply_to || '指定なし');
     const notes = [];
+    if (campaign.status === 'COMPLETED') notes.push('送信処理が終了しました。失敗・不明・配信停止による除外が含まれる場合があります。下の集計を確認してください。受信トレイへの到達を保証する表示ではありません。');
     if (campaign.pause_reason) notes.push(PAUSE_LABELS[campaign.pause_reason] ?? '停止理由を確認できません。管理者に確認してください。');
     if (campaign.start_error) notes.push(errorText(new ApiError(campaign.start_error)));
     if (campaign.reject_reason) notes.push(`差戻しの理由：${campaign.reject_reason}`);
@@ -131,6 +141,9 @@ export async function mount(ctx, id) {
     q('[data-preview]').disabled = gate.busy || loading || !previewAllowed;
     const testAllowed = canSend(ctx.user) && ['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(campaign.status) && !!campaign.campaign_id && !dirty && !blocked;
     q('[data-test]').disabled = !testAllowed;
+    q('[data-recovery-area]').hidden = !hasRole(ctx.user, 'admin');
+    q('[data-recovery]').disabled = !testAllowed || !hasRole(ctx.user, 'admin');
+    q('[data-recovery-note]').disabled = q('[data-recovery]').disabled || !q('[data-recovery]').checked;
     setText(root, '[data-test-reason]', testAllowed ? '設定のテスト送信先だけへ送ります。1日の送信件数に数えます。不明分は自動で送り直しません。' : 'テスト送信は管理者・配信担当が、保存済みの下書き・承認待ち・承認済みの配信で行えます。');
     const policy = controlPolicy(campaign, ctx.user, blocked);
     for (const [action, value] of Object.entries(policy)) {
@@ -140,7 +153,7 @@ export async function mount(ctx, id) {
     q('[data-reject-area]').hidden = campaign.status !== 'PENDING_APPROVAL';
     q('[data-remediation]').hidden = campaign.status !== 'PAUSED' || campaign.pause_reason === 'USER' || !hasRole(ctx.user, 'admin');
     setText(root, '[data-control-reason]', campaign.status === 'PAUSED' ? policy.resume.reason || '再開の前に送信条件を確かめます。一時停止から7日たつと自動で中止します。' : '一時停止・中止をしても、SESがすでに受け付けたメールは取り消せません。');
-    q('[data-mode]').disabled = !['DRAFT', 'APPROVED'].includes(campaign.status) || !canSend(ctx.user) || blocked;
+    q('[data-mode]').disabled = !canSchedule(campaign, ctx.user, blocked);
     q('[data-at]').disabled = q('[data-mode]').disabled || q('[data-mode]').value !== 'SCHEDULED';
     q('[data-hour-warning]').hidden = q('[data-mode]').value !== 'SCHEDULED' || !isOnTheHour(q('[data-at]').value);
     setText(root, '[data-next-at]', campaign.next_attempt_at ? `1日の送信上限で待機中です。再開予定：${formatTime(campaign.next_attempt_at)}。条件を確かめ直してから続きを送ります。` : '');
@@ -288,12 +301,15 @@ export async function mount(ctx, id) {
   on(root, '[data-test]', 'click', () => {
     if (q('[data-test]').disabled) return;
     perform(async () => {
-      const result = await ctx.api.request(`/campaigns/${campaign.campaign_id}/test-send`, { method: 'POST', body: {} });
+      const body = testSendInput(ctx.user, q('[data-recovery]').checked, q('[data-recovery-note]').value);
+      if (body.purpose && !await confirmDialog('受入確認の再検証として、設定のテスト送信先だけに送ります。理由を監査記録に残します。')) return;
+      const result = await ctx.api.request(`/campaigns/${campaign.campaign_id}/test-send`, { method: 'POST', body });
       const labels = { ACCEPTED: '送信受付', FAILED: '失敗', UNKNOWN: '不明（送り直しません）', NOT_ATTEMPTED: '未試行' };
       showMessage(root, `テスト送信の結果\n${result.results.map((item) => `${visibleAddress(item.email_masked, ctx.user)}：${labels[item.status] ?? '要確認'}${item.code === 'PRIOR_UNKNOWN' ? '（前回の結果が不明のため送り直しません）' : ''}`).join('\n')}`);
     }, { mutation: true });
   });
   on(root, '[data-confirm-content]', 'change', render);
+  on(root, '[data-recovery]', 'change', render);
   for (const selector of ['[data-mode]', '[data-at]']) on(root, selector, 'change', render);
   on(root, '[data-primary]', 'click', () => {
     const primary = primaryAction(campaign, ctx.user, { busy: gate.busy || loading, dirty, stale, uncertain, previewHash: renderedHash, confirmed: q('[data-confirm-content]').checked });
