@@ -37,6 +37,7 @@ export function createHandler(deps = {}) {
     stateMachineArn: environment.STATE_MACHINE_ARN, scheduleGroup: environment.SCHEDULE_GROUP,
     schedulerRoleArn: environment.SCHEDULER_ROLE_ARN, workerFunctionArn: environment.WORKER_FUNCTION_ARN,
     eraseMacKeyId: environment.ERASE_MAC_KEY_ID,
+    alertTopicArn: environment.ALERT_TOPIC_ARN,
     ...createTime(deps), ...deps,
   };
   let runtime;
@@ -53,6 +54,7 @@ export function createHandler(deps = {}) {
     runtime.lock ??= createSendLock(runtime);
     runtime.contactLock ??= createContactLock(runtime);
     runtime.precheck ??= createPrecheck(runtime);
+    runtime.notify ??= async (code, id) => runtime.sns.publish({ TopicArn: runtime.alertTopicArn, Message: JSON.stringify({ campaign_id: id, code }) });
     return runtime;
   };
   return async (event, context = {}) => {
@@ -84,7 +86,7 @@ export function createHandler(deps = {}) {
       const topics = topicDefinitions.map((item) => item.TopicName);
       if (topicOperations.has(route.operation)) body = validateRoute(route.operation, input, { now: services.now, senderDomain: services.senderDomain, topics });
       const value = await routes[route.operation]({ runtime: services, event, context, route, params, query, body, user, audit, requestId, topics, topicDefinitions });
-      if (!['GET'].includes(route.method) && !['contacts.get', 'campaigns.preview'].includes(route.operation)) await audit(route.operation.toUpperCase().replaceAll('.', '_'), params.id ?? params.importId ?? route.operation.split('.')[0]);
+      if (!['GET'].includes(route.method) && !['contacts.get', 'campaigns.preview', 'campaigns.submit', 'campaigns.approve', 'campaigns.unknowns'].includes(route.operation)) await audit(route.operation.toUpperCase().replaceAll('.', '_'), params.id ?? params.importId ?? route.operation.split('.')[0]);
       return jsonResponse(value?.statusCode ?? 200, value?.data ?? value);
     } catch (error) {
       if (audit && route?.method !== 'GET') {

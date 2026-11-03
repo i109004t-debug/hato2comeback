@@ -5,6 +5,7 @@ import { createMetrics } from '../common/metrics.js';
 import { createLogger } from '../common/log.js';
 import { createTime } from '../common/time.js';
 import { AppError } from '../common/http.js';
+import { auditArchiveKey } from '../common/audit-archive.js';
 
 const safe = (value) => value.replace(/[^A-Za-z0-9._-]/g, '_');
 
@@ -34,7 +35,8 @@ export function createHandler(deps = {}) {
         const sha256 = createHash('sha256').update(JSON.stringify(contents)).digest('hex');
         const stream_ts = Number.isFinite(record.dynamodb.ApproximateCreationDateTime) ? new Date(record.dynamodb.ApproximateCreationDateTime * 1000).toISOString() : ts;
         const body = { eventID: record.eventID, eventName: record.eventName, ts, stream_ts, ...contents, sha256 };
-        const Key = insert ? `audit/${date}/${safe(keys.SK)}.json` : `tamper/${date}/${safe(record.eventID)}.json`;
+        if (item.PK !== keys.PK || item.SK !== keys.SK) throw new Error('Audit identity mismatch');
+        const Key = insert ? auditArchiveKey({ PK: keys.PK, SK: keys.SK, ts }) : `tamper/${date}/${safe(record.eventID)}.json`;
         await runtime.s3.putObject({ Bucket: runtime.auditArchiveBucket, Key, ContentType: 'application/json', Body: JSON.stringify(body) });
         if (!insert) { metrics ??= createMetrics(runtime); metrics.emit('AuditTamper', 1); }
       }

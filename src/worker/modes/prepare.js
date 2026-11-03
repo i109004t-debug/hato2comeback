@@ -6,6 +6,8 @@ import { applyContactMetadata } from '../../common/contact-metadata.js';
 import { isErased } from '../../common/erase.js';
 
 import { reviewUnsupportedSchema } from '../../common/schema.js';
+import { completionForecast, campaignDeadline } from '../../common/forecast.js';
+import { expireCampaign, notifyScheduleDelay } from '../../common/campaign-lifecycle.js';
 
 export async function prepare(event, runtime) {
   const { campaign_id: id, execution_arn: executionArn } = event;
@@ -16,18 +18,22 @@ export async function prepare(event, runtime) {
   if (campaign?.status === 'CANCELLED') return output('CANCELLED');
   if (!campaign || !['QUEUED', 'SCHEDULED'].includes(campaign.status)) return output('REVIEW', { reason: 'UNEXPECTED_STATUS' });
   if (campaign.execution_arn && campaign.execution_arn !== executionArn && !resume) return output('CANCELLED');
+  const config = await runtime.config.get();
+  campaign = await expireCampaign(runtime, campaign, config);
+  if (campaign.status === 'CANCELLED') return output('CANCELLED');
+  campaign = await notifyScheduleDelay(runtime, campaign);
   const previousExecution = campaign.execution_arn;
   campaign = await change(runtime, id, undefined, [campaign.status], { status: 'QUEUED', execution_arn: executionArn }, (current) => current.execution_arn === previousExecution);
   if (campaign?.execution_arn !== executionArn || campaign.status !== 'QUEUED') return currentAction(campaign, executionArn) ?? output('REVIEW', { reason: 'UNEXPECTED_STATUS' });
   const budget = await workflowStep(runtime, id, executionArn, 'prepare');
   if (budget) return budget;
-  const config = await runtime.config.get();
   if (!await runtime.lock.acquire(id, config.lock_ttl_seconds)) return boundedWait(runtime, id, executionArn, 'WAIT_LOCK', 'prepare');
   campaign = await change(runtime, id, executionArn, ['QUEUED'], { wait_lock_run: 0, throttled_run: 0 });
   const stoppedBeforeSnapshot = currentAction(campaign, executionArn);
   if (stoppedBeforeSnapshot) { await runtime.lock.release(id); return stoppedBeforeSnapshot; }
-  const fail = async (code) => {
-    const saved = await change(runtime, id, executionArn, ['QUEUED'], { status: 'APPROVED', start_error: code, execution_arn: '' });
+  const fail = async (code, fields = {}) => {
+    const exceeded = code === 'AUDIENCE_EXCEEDS_APPROVAL';
+    const saved = await change(runtime, id, executionArn, ['QUEUED'], { ...fields, status: exceeded ? 'PENDING_APPROVAL' : 'APPROVED', start_error: code, execution_arn: '' }, () => true, exceeded ? ['approved_by', 'approved_at', 'approval_scope'] : []);
     await runtime.lock.release(id);
     runtime.metrics.emit('StartFailed', 1);
     await runtime.record(id, 'START_FAILED', code);
@@ -101,13 +107,24 @@ export async function prepare(event, runtime) {
     progress = { chunk: 0, index: 0 };
     counts = { accepted: 0, failed: 0, unknown: 0, skipped_blocked: 0, excluded_allowlist: excluded };
   }
+  if (!campaign.approval_scope) return fail('OUTSIDE_APPROVED_WINDOW');
+  if (runtime.now() < Date.parse(campaign.approval_scope.send_after)) return fail('OUTSIDE_APPROVED_WINDOW');
+  if (recipientsTotal > campaign.approval_scope.max_recipients) return fail('AUDIENCE_EXCEEDS_APPROVAL', { recipients_total: recipientsTotal });
+  campaign = await expireCampaign(runtime, await runtime.store.get('CAMPAIGN', id), config, { recipients_total: recipientsTotal, chunks_total: chunksTotal });
+  if (campaign.status === 'CANCELLED') { await runtime.lock.release(id); return output('CANCELLED'); }
   // 長いスナップショット作成後に期限切れの検査結果で送信を許可しない。
   health = await runtime.precheck.run({ campaign, allowedStatuses: ['QUEUED'], remaining: recipientsTotal, recent: false });
   if (!health.ok) return fail(health.code);
+  const startedAt = resume ? campaign.started_at : new Date(runtime.now()).toISOString();
+  const deadlineAt = campaignDeadline({ ...campaign, started_at: startedAt }, health.config);
+  const forecast = await completionForecast(runtime, campaign, { recipients: resume ? Math.max(0, recipientsTotal - ['accepted', 'failed', 'unknown', 'skipped_blocked'].reduce((sum, field) => sum + (counts[field] ?? 0), 0)) : recipientsTotal, deadline_at: deadlineAt, health });
+  if (!forecast.completes) return fail('CAPACITY_INSUFFICIENT', { forecast });
+  campaign = await expireCampaign(runtime, await runtime.store.get('CAMPAIGN', id), health.config, { recipients_total: recipientsTotal, chunks_total: chunksTotal });
+  if (campaign.status === 'CANCELLED') { await runtime.lock.release(id); return output('CANCELLED'); }
   const saved = await change(runtime, id, executionArn, ['QUEUED'], {
     status: 'SENDING', recipients_total: recipientsTotal, chunks_total: chunksTotal,
     snapshot_batch_size: campaign.snapshot_batch_size ?? health.config.batch_size,
-    progress, counts, rate_per_sec: health.rate, started_at: resume ? campaign.started_at : new Date(runtime.now()).toISOString(),
+    progress, counts, rate_per_sec: health.rate, started_at: startedAt, deadline_at: deadlineAt, forecast, accepted_buckets: resume ? campaign.accepted_buckets ?? {} : {},
   });
   const stopped = currentAction(saved, executionArn);
   if (stopped) { await runtime.lock.release(id); return stopped; }

@@ -8,6 +8,7 @@ import { contactPages, allRecords, updateRecord, updateCampaign, timestamp, conf
 import { jstDate } from '../../common/time.js';
 import { reconcileImport } from '../../common/import-job.js';
 import { createMonitoring } from '../../common/monitoring.js';
+import { expireCampaign, notifyScheduleDelay, unknownReviewFields, deleteSnapshot } from '../../common/campaign-lifecycle.js';
 import { addressHash } from '../../common/log.js';
 import { AppError } from '../../common/http.js';
 import { ensureContactMetadata, applyContactMetadata } from '../../common/contact-metadata.js';
@@ -220,12 +221,22 @@ async function checkStartResources(runtime, campaign) {
 
 async function campaigns(runtime) {
   const config = await runtime.config.get();
-  for await (const campaign of allRecords(runtime, 'CAMPAIGN')) {
+  for await (let campaign of allRecords(runtime, 'CAMPAIGN')) {
     try {
       if (await reviewUnsupportedSchema(runtime, campaign)) continue;
+      if (['COMPLETED', 'CANCELLED'].includes(campaign.status) && campaign.unknown_review?.status === 'RESOLVED' && !campaign.snapshot_deleted_at) {
+        await deleteSnapshot(runtime, campaign);
+        campaign = await updateCampaign(runtime, campaign, [campaign.status], { snapshot_deleted_at: timestamp(runtime) });
+      }
+      campaign = await expireCampaign(runtime, campaign, config);
+      campaign = await notifyScheduleDelay(runtime, campaign);
+      if (campaign.unknown_review?.status === 'OPEN' && runtime.now() - Date.parse(campaign.unknown_review.opened_at) > 3 * 86400000 && (!campaign.unknown_review.notified_at || runtime.now() - Date.parse(campaign.unknown_review.notified_at) >= 7 * 86400000)) {
+        campaign = await updateCampaign(runtime, campaign, [campaign.status], { unknown_review: { ...campaign.unknown_review, notified_at: timestamp(runtime) } });
+        await runtime.notify('UNKNOWN_REVIEW_OPEN', campaign.campaign_id);
+      }
       if (['QUEUED', 'SCHEDULED'].includes(campaign.status) && runtime.now() - Date.parse(campaign.start_requested_at ?? campaign.updated_at ?? campaign.created_at) >= 900000) await checkStartResources(runtime, campaign);
-      if (campaign.status === 'PAUSED' && runtime.now() - Date.parse(campaign.paused_at ?? campaign.updated_at) >= config.pause_timeout_days * 86400000 || ['QUEUED', 'SENDING'].includes(campaign.status) && runtime.now() - Date.parse(campaign.started_at) > config.max_pending_days * 86400000) {
-        await updateCampaign(runtime, campaign, [campaign.status], { status: 'CANCELLED', cancel_reason: campaign.status === 'PAUSED' ? 'PAUSE_TIMEOUT' : 'MAX_PENDING_DAYS', completed_at: timestamp(runtime) });
+      if (campaign.status === 'PAUSED' && runtime.now() - Date.parse(campaign.paused_at ?? campaign.updated_at) >= config.pause_timeout_days * 86400000) {
+        campaign = await updateCampaign(runtime, campaign, [campaign.status], { status: 'CANCELLED', cancel_reason: 'PAUSE_TIMEOUT', completed_at: timestamp(runtime), ...unknownReviewFields(campaign, runtime.now()) });
         await runtime.record(campaign.campaign_id, 'CANCEL', 'EXPIRED');
         // workerが動いている可能性があるため、送信ロックは奪わない。
       }

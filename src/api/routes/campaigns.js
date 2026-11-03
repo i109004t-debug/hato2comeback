@@ -3,12 +3,14 @@ import { AppError, invalid } from '../../common/http.js';
 import { ulid } from '../../common/ids.js';
 import { createFooter } from '../../common/footer.js';
 import { formatFrom, maskEmail } from '../../common/email.js';
-import { addressHash } from '../../common/log.js';
+import { addressHash, redactText } from '../../common/log.js';
 import { assertIndependentApproval, authorize } from '../../common/authz.js';
 import { bodyWarnings } from '../../common/validate.js';
 import { listRecords, objectText, timestamp, updateCampaign, conflict } from '../../common/records.js';
 import { createSender, buildSendInput } from '../../common/sender.js';
 import { readChunk } from '../../worker/state.js';
+import { completionForecast, remainingRecipients, campaignDeadline } from '../../common/forecast.js';
+import { expireCampaign, unknownReviewFields, deleteSnapshot } from '../../common/campaign-lifecycle.js';
 
 const active = ['APPROVED', 'SCHEDULED', 'QUEUED', 'SENDING', 'PAUSED', 'NEEDS_REVIEW'];
 const clean = (campaign) => {
@@ -16,6 +18,22 @@ const clean = (campaign) => {
   return value;
 };
 const hashContent = (subject, text) => createHash('sha256').update(`${subject}\n\n${text}`).digest('hex');
+
+async function scopeInput(runtime, body) {
+  const config = await runtime.config.get();
+  const now = runtime.now();
+  if (body.max_recipients > config.max_recipients_per_campaign) throw invalid('max_recipients');
+  if (Date.parse(body.send_by) < now + 3600000 || Date.parse(body.send_by) > now + 90 * 86400000) throw invalid('send_by');
+  const send_after = body.send_after ?? new Date(now).toISOString();
+  if (!(Date.parse(send_after) < Date.parse(body.send_by))) throw invalid('send_after');
+  return { max_recipients: body.max_recipients, send_by: body.send_by, send_after };
+}
+
+async function withForecast(runtime, campaign, options) {
+  try { return { ...clean(campaign), forecast: await completionForecast(runtime, campaign, options) }; } catch {
+    return { ...clean(campaign), forecast: null, forecast_error: 'MONITORING_UNAVAILABLE' };
+  }
+}
 
 async function load(ctx) {
   const campaign = await ctx.runtime.store.get('CAMPAIGN', ctx.params.id);
@@ -52,7 +70,12 @@ async function create({ runtime, body, user, topicDefinitions }) {
 
 async function get(ctx) {
   const campaign = await load(ctx);
-  const value = clean(campaign);
+  const value = await withForecast(ctx.runtime, campaign, ['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(campaign.status) ? { deadline_at: ctx.query.send_by, send_after: ctx.query.send_after } : undefined);
+  Object.assign(value, { events_checked_at: campaign.events_checked_at ?? null, events_last_seen_at: campaign.events_last_seen_at ?? null, events_missing: campaign.events_missing ?? 0, events_status: campaign.events_status ?? 'INSUFFICIENT_DATA' });
+  const config = await ctx.runtime.config.get();
+  value.deadline_at = campaignDeadline(campaign, config);
+  const estimate = await ctx.runtime.store.get('SETTINGS', 'TOPIC_COUNTS');
+  if (campaign.status === 'DRAFT') { value.audience_estimate = estimate?.counts?.[campaign.topic] ?? null; value.audience_estimate_at = estimate?.counted_at ?? null; }
   if (campaign.status === 'NEEDS_REVIEW' && ctx.user.roles.includes('admin') && campaign.review && campaign.review.phase !== 'prepare' && Number.isSafeInteger(campaign.chunks_total)) {
     const rows = campaign.review.chunk === campaign.chunks_total ? [] : await readChunk(ctx.runtime, campaign, campaign.review.chunk);
     value.review_recipients = rows.slice(campaign.review.index_from, campaign.review.index_to + 1).map((row) => row.e);
@@ -76,6 +99,9 @@ async function submit(ctx) {
   const { runtime, user } = ctx;
   const campaign = await load(ctx);
   assertStatus(campaign, ['DRAFT']);
+  const proposed_scope = await scopeInput(runtime, ctx.body);
+  const estimate = await runtime.store.get('SETTINGS', 'TOPIC_COUNTS');
+  const audience = { audience_estimate: estimate?.counts?.[campaign.topic] ?? null, audience_estimate_at: estimate?.counted_at ?? null };
   const f = await fixed(runtime, campaign);
   const rev = (campaign.rev ?? 0) + 1;
   const template_name = `ht2-c-${campaign.campaign_id}-${rev}`;
@@ -86,26 +112,34 @@ async function submit(ctx) {
     if (stored?.Subject !== content.Subject || stored.Text !== content.Text || stored.Html) throw new AppError('HASH_MISMATCH', 409, '固定テンプレートの内容が一致しません。');
   }
   const auto = f.org.approval_required === false;
+  if (auto && ctx.body.send_after === undefined) proposed_scope.send_after = timestamp(runtime);
   const saved = await updateCampaign(runtime, campaign, ['DRAFT'], {
     status: auto ? 'APPROVED' : 'PENDING_APPROVAL', rev, template_name, content_sha256: hashContent(content.Subject, content.Text),
     from: f.from, reply_to: f.reply_to, footer_text: f.footer_text, submitted_by: user.sub, submitted_at: timestamp(runtime),
-    approved_by: auto ? 'AUTO' : '', approved_at: auto ? timestamp(runtime) : '',
-  });
-  if (auto) await ctx.audit('APPROVE', campaign.campaign_id, { approved_by: 'AUTO' });
-  return clean(saved);
+    approved_by: auto ? 'AUTO' : '', approved_at: auto ? timestamp(runtime) : '', approval_required: !auto,
+    proposed_scope, ...audience, ...(auto ? { approval_scope: { ...proposed_scope, approved_by: 'AUTO', approved_at: timestamp(runtime) } } : {}),
+  }, auto ? [] : ['approval_scope']);
+  const details = { proposed_scope, ...audience, ...(auto ? { approval_scope: saved.approval_scope, approved_by: 'AUTO' } : {}) };
+  await ctx.audit('CAMPAIGNS_SUBMIT', campaign.campaign_id, details);
+  if (auto) await ctx.audit('APPROVE', campaign.campaign_id, details);
+  return withForecast(runtime, saved);
 }
 
 async function approve(ctx) {
   const campaign = await load(ctx);
-  assertStatus(campaign, ['PENDING_APPROVAL']);
-  assertIndependentApproval(ctx.user, campaign.submitted_by);
+  assertStatus(campaign, ['PENDING_APPROVAL', 'APPROVED']);
+  const org = await ctx.runtime.store.get('SETTINGS', 'ORG');
+  if (org?.approval_required !== false) assertIndependentApproval(ctx.user, campaign.submitted_by);
   if (ctx.body.content_sha256 !== campaign.content_sha256) throw new AppError('HASH_MISMATCH', 409, '承認する内容が一致しません。');
-  return clean(await updateCampaign(ctx.runtime, campaign, ['PENDING_APPROVAL'], { status: 'APPROVED', approved_by: ctx.user.sub, approved_at: timestamp(ctx.runtime) }));
+  const approval_scope = { ...await scopeInput(ctx.runtime, ctx.body), approved_by: ctx.user.sub, approved_at: timestamp(ctx.runtime) };
+  const saved = await updateCampaign(ctx.runtime, campaign, [campaign.status], { status: 'APPROVED', approved_by: ctx.user.sub, approved_at: approval_scope.approved_at, approval_scope });
+  await ctx.audit('CAMPAIGNS_APPROVE', campaign.campaign_id, { approval_scope, audience_estimate: campaign.audience_estimate, audience_estimate_at: campaign.audience_estimate_at });
+  return withForecast(ctx.runtime, saved);
 }
 
 async function reject(ctx) {
   const campaign = await load(ctx);
-  return clean(await updateCampaign(ctx.runtime, campaign, ['PENDING_APPROVAL'], { status: 'DRAFT', reject_reason: ctx.body.reason }));
+  return clean(await updateCampaign(ctx.runtime, campaign, ['PENDING_APPROVAL'], { status: 'DRAFT', reject_reason: ctx.body.reason }, ['approval_scope', 'approved_by', 'approved_at']));
 }
 
 function decodeTextMime(mime) {
@@ -213,6 +247,8 @@ async function start(ctx) {
   const { runtime, body, user } = ctx;
   let campaign = await load(ctx);
   assertStatus(campaign, ['APPROVED']);
+  const at = body.mode === 'SCHEDULED' ? Date.parse(body.at) : runtime.now();
+  if (!(at >= Date.parse(campaign.approval_scope?.send_after) && at < Date.parse(campaign.approval_scope?.send_by))) throw new AppError('OUTSIDE_APPROVED_WINDOW', 422, '承認された期間内に開始・予約してください。');
   const health = await check(ctx, campaign, { scheduling: body.mode === 'SCHEDULED' });
   const attempt = await nextStart(runtime, campaign);
   if (body.mode === 'NOW') {
@@ -265,7 +301,8 @@ async function unschedule(ctx) {
 }
 
 async function pause(ctx) {
-  return clean(await updateCampaign(ctx.runtime, await load(ctx), ['SENDING'], { status: 'PAUSED', pause_reason: 'USER', paused_at: timestamp(ctx.runtime) }));
+  const campaign = await load(ctx);
+  return clean(await updateCampaign(ctx.runtime, campaign, ['SENDING', 'QUEUED'], { status: 'PAUSED', pause_reason: 'USER', pause_phase: campaign.status === 'QUEUED' ? 'prepare' : 'send', paused_at: timestamp(ctx.runtime) }));
 }
 
 async function resume(ctx) {
@@ -273,6 +310,8 @@ async function resume(ctx) {
   assertStatus(campaign, ['PAUSED']);
   authorize(ctx.user, 'campaigns.resume', campaign);
   const config = await ctx.runtime.config.get();
+  const expired = await expireCampaign(ctx.runtime, campaign, config);
+  if (expired.status === 'CANCELLED') return clean(expired);
   if (ctx.runtime.now() - Date.parse(campaign.paused_at ?? campaign.updated_at) >= config.pause_timeout_days * 86400000) throw new AppError('STATE_CONFLICT', 409, '一時停止の期限を過ぎています。');
   if (campaign.pause_reason !== 'USER') {
     if (!ctx.body.note || !ctx.body.evidence_key) throw invalid('note', 'REMEDIATION_REQUIRED');
@@ -297,8 +336,9 @@ async function cancel(ctx) {
   const campaign = await load(ctx);
   assertStatus(campaign, active);
   if (campaign.status === 'SCHEDULED') await deleteSchedule(ctx, campaign);
-  const saved = await updateCampaign(ctx.runtime, campaign, [campaign.status], { status: 'CANCELLED', cancel_reason: ctx.body.reason ?? 'USER', completed_at: timestamp(ctx.runtime) }, ['task_token']);
+  const saved = await updateCampaign(ctx.runtime, campaign, [campaign.status], { status: 'CANCELLED', cancel_reason: ctx.body.reason ?? 'USER', completed_at: timestamp(ctx.runtime), unsent_count: remainingRecipients(campaign), ...unknownReviewFields(campaign, ctx.runtime.now()) }, ['task_token']);
   if (campaign.task_token) await ctx.runtime.sfn.sendTaskFailure({ taskToken: campaign.task_token, error: 'Cancelled' });
+  if (saved.unknown_review?.status !== 'OPEN' && !['SENDING', 'PAUSED'].includes(campaign.status)) await deleteSnapshot(ctx.runtime, saved);
   return clean(saved);
 }
 
@@ -376,9 +416,10 @@ async function testSend(ctx) {
 
 async function stats(ctx) {
   const campaign = await load(ctx);
-  if (!campaign.started_at) return { counts: campaign.counts ?? {}, metrics: null };
+  const events = { events_checked_at: campaign.events_checked_at ?? null, events_last_seen_at: campaign.events_last_seen_at ?? null, events_missing: campaign.events_missing ?? 0, events_status: campaign.events_status ?? 'INSUFFICIENT_DATA' };
+  if (!campaign.started_at) return { counts: campaign.counts ?? {}, metrics: null, ...events };
   const cached = ctx.runtime.statsCache.get(campaign.campaign_id);
-  if (cached && ctx.runtime.now() < cached.expires) return { ...cached.value, counts: campaign.counts };
+  if (cached && ctx.runtime.now() < cached.expires) return { ...cached.value, counts: campaign.counts, ...events };
   const names = ['Send', 'Delivery', 'Bounce', 'Complaint', 'DeliveryDelay', 'Subscription', 'Reject', 'RenderingFailure'];
   const queries = names.map((MetricName, index) => ({ Id: `m${index}`, MetricStat: { Metric: { Namespace: 'AWS/SES', MetricName, Dimensions: [{ Name: 'campaign', Value: campaign.campaign_id }] }, Period: ctx.runtime.now() - Date.parse(campaign.started_at) <= 15 * 86400000 ? 3600 : 86400, Stat: 'Sum' }, ReturnData: true }));
   const points = names.map(() => []);
@@ -399,7 +440,7 @@ async function stats(ctx) {
   } while (token);
   const value = { counts: campaign.counts ?? {}, metrics: Object.fromEntries(names.map((name, i) => [name, points[i].length ? points[i].reduce((a, b) => a + b, 0) : null])), observed_at: timestamp(ctx.runtime) };
   ctx.runtime.statsCache.set(campaign.campaign_id, { value, expires: started + 60000 });
-  return value;
+  return { ...value, ...events };
 }
 
 async function failures(ctx) {
@@ -425,7 +466,36 @@ async function failures(ctx) {
     }
   }
   const end = offset + ctx.query.limit;
-  return { items: rows.slice(offset, end), cursor: end < rows.length ? Buffer.from(String(end)).toString('base64url') : null };
+  const items = rows.slice(offset, end);
+  if (ctx.user.roles.includes('admin') && campaign.unknown_review?.status === 'OPEN' && ctx.runtime.now() < Date.parse(campaign.started_at) + 30 * 86400000) {
+    const chunks = new Map();
+    for (const item of items.filter((row) => row.r === 'UNKNOWN')) {
+      if (!Number.isSafeInteger(item.ci) || item.ci < 0 || item.ci >= campaign.chunks_total || !Number.isSafeInteger(item.ix) || item.ix < 0) throw new Error('Invalid unknown position');
+      try {
+        if (!chunks.has(item.ci)) chunks.set(item.ci, await readChunk(ctx.runtime, campaign, item.ci));
+        const row = chunks.get(item.ci)[item.ix];
+        if (!row || addressHash(row.e, ctx.runtime.hmacKey) !== item.a) throw new Error('Unknown address mismatch');
+        item.email = row.e;
+      } catch (error) { if (!['NoSuchKey', 'NotFound'].includes(error.name)) throw error; }
+    }
+  }
+  return { items, cursor: end < rows.length ? Buffer.from(String(end)).toString('base64url') : null };
+}
+
+async function unknowns(ctx) {
+  const { runtime, body } = ctx;
+  const campaign = await load(ctx);
+  assertStatus(campaign, ['COMPLETED', 'CANCELLED']);
+  if (campaign.unknown_review?.status !== 'OPEN') throw new AppError('STATE_CONFLICT', 409, '未解決の調査がありません。');
+  // 次段階の配送記録の索引を差し込む。未確認は未受付の証拠にしない。
+  const accepted = runtime.unknownIndex ? await runtime.unknownIndex.countAccepted(campaign) : 0;
+  if (!Number.isSafeInteger(accepted) || accepted < 0 || accepted > campaign.unknown_review.count) throw new AppError('MONITORING_UNAVAILABLE', 503, 'SESの受付を確認できません。');
+  const decision = { decision: body.decision, note: redactText(body.note), by: ctx.user.sub, at: timestamp(runtime), ses_accepted_count: accepted };
+  const unknown_review = { ...campaign.unknown_review, status: body.decision === 'NO_RESEND' ? 'RESOLVED' : 'OPEN', decisions: [...(campaign.unknown_review.decisions ?? []), decision] };
+  const saved = await updateCampaign(runtime, campaign, [campaign.status], { unknown_review });
+  await ctx.audit('UNKNOWN_DECISION', campaign.campaign_id, decision);
+  if (unknown_review.status === 'RESOLVED') await deleteSnapshot(runtime, campaign);
+  return clean(saved);
 }
 
 export default {
@@ -433,5 +503,5 @@ export default {
   'campaigns.create': create, 'campaigns.get': get, 'campaigns.update': update, 'campaigns.preview': preview,
   'campaigns.submit': submit, 'campaigns.approve': approve, 'campaigns.reject': reject, 'campaigns.start': start,
   'campaigns.unschedule': unschedule, 'campaigns.pause': pause, 'campaigns.resume': resume, 'campaigns.cancel': cancel,
-  'campaigns.review': review, 'campaigns.test-send': testSend, 'campaigns.stats': stats, 'campaigns.failures': failures,
+  'campaigns.review': review, 'campaigns.test-send': testSend, 'campaigns.stats': stats, 'campaigns.failures': failures, 'campaigns.unknowns': unknowns,
 };

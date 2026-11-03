@@ -13,7 +13,7 @@ export function configDefaults(env) {
     campaign_delay_pause_ratio: 0.10, daily_send_cap: 1000,
     delivery_check_required: env === 'prod', nonprod_allowlist: [], nonprod_allowlist_s3_key: '',
     health_check_seconds: 60, auth_status_max_age_hours: 26,
-    delivery_check_max_age_days: 90, max_pending_days: 7, event_log_stale_seconds: 900,
+    delivery_check_max_age_days: 90, max_pending_days: 7, event_log_stale_seconds: 900, event_missing_ratio: 0.02,
   };
 }
 
@@ -23,9 +23,10 @@ export function validateConfig(input, env) {
   if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some((name) => !Object.hasOwn(defaults, name))) fail();
   const value = { ...defaults, ...input };
   for (const name of ['sending_enabled', 'delivery_check_required']) if (typeof value[name] !== 'boolean') fail();
-  for (const name of ['max_rate_per_sec', 'ses_rate_safety_factor', 'campaign_bounce_pause_ratio', 'campaign_delay_pause_ratio', 'auth_status_max_age_hours', 'delivery_check_max_age_days']) {
+  for (const name of ['max_rate_per_sec', 'ses_rate_safety_factor', 'campaign_bounce_pause_ratio', 'campaign_delay_pause_ratio', 'auth_status_max_age_hours', 'delivery_check_max_age_days', 'event_missing_ratio']) {
     if (!Number.isFinite(value[name]) || value[name] <= 0) fail();
   }
+  if (value.event_missing_ratio > 1) fail();
   for (const name of ['batch_size', 'progress_every', 'max_recipients_per_campaign', 'lock_ttl_seconds', 'pause_timeout_days', 'campaign_min_sample', 'daily_send_cap', 'health_check_seconds', 'max_pending_days', 'event_log_stale_seconds']) {
     if (!Number.isSafeInteger(value[name]) || value[name] < 1) fail();
   }

@@ -850,6 +850,12 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
+            Action: ['s3:DeleteObject']
+            Resource: !Sub '${DataBucket.Arn}/recipients/*'
+          - Effect: Allow
+            Action: ['sns:Publish']
+            Resource: !Ref AlertTopic
+          - Effect: Allow
             Action: ['kms:GenerateMac']
             Resource: !GetAtt EraseMacKey.Arn
           - Effect: Allow
@@ -932,6 +938,9 @@ Resources:
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
+          - Effect: Allow
+            Action: ['s3:DeleteObject']
+            Resource: !Sub '${DataBucket.Arn}/recipients/*'
           - Effect: Allow
             Action: ['kms:GenerateMac', 'kms:DescribeKey']
             Resource: !GetAtt EraseMacKey.Arn

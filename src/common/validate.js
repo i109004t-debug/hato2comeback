@@ -89,6 +89,8 @@ const settings = record({
 }, ['version', 'from_local', 'from_name', 'legal']);
 const draft = { topic, subject: { normalize: validateSubject }, body_text: { normalize: validateBody } };
 const empty = record({});
+const scopeTime = { normalize: (value) => { if (!isIsoDateTime(value)) throw invalid('send_by', 'DATETIME'); return new Date(value).toISOString(); } };
+const approvalScope = { max_recipients: number(1, 100000, true), send_by: scopeTime, send_after: scopeTime };
 
 export const routeSchemas = Object.freeze({
   'me.get': empty,
@@ -111,8 +113,8 @@ export const routeSchemas = Object.freeze({
   'campaigns.update': record({ version, ...draft }, ['version']),
   'campaigns.preview': empty,
   'campaigns.test-send': record({ purpose: enumeration('ACCEPTANCE_RECOVERY'), note }, []),
-  'campaigns.submit': empty,
-  'campaigns.approve': record({ content_sha256: hash }),
+  'campaigns.submit': record(approvalScope, ['max_recipients', 'send_by']),
+  'campaigns.approve': record({ content_sha256: hash, ...approvalScope }, ['content_sha256', 'max_recipients', 'send_by']),
   'campaigns.reject': record({ reason: note }),
   'campaigns.start': record({ mode: enumeration('NOW', 'SCHEDULED'), at: string(1, 40) }, ['mode']),
   'campaigns.unschedule': empty,
@@ -122,6 +124,7 @@ export const routeSchemas = Object.freeze({
   'campaigns.review': record({ decision: enumeration('SKIP', 'RESEND', 'CANCEL'), note, resume: boolean }, ['decision', 'note']),
   'campaigns.stats': empty,
   'campaigns.failures': empty,
+  'campaigns.unknowns': record({ decision: enumeration('NO_RESEND', 'HOLD'), note: { ...plainText(1, 500), check: (value) => value.trim().length > 0 } }),
   'audit.list': empty,
   'settings.delivery-check': record({ passed: boolean, note, evidence_key: evidence, cases: { type: 'map', key: string(4, 4, { pattern: /^T-\d{2}$/ }), values: enumeration('PASS', 'FAIL'), min: 1 }, config_hash: hash, dns_config_hash: hash }),
 });
@@ -224,6 +227,7 @@ export function validateParams(params) {
 export function validateQuery(route, query = {}) {
   const list = ['contacts.list', 'imports.list', 'campaigns.list', 'campaigns.failures', 'audit.list'];
   const properties = list.includes(route) ? { limit: string(1, 2, { pattern: /^(?:[1-9]|[1-4]\d|50)$/ }), cursor: string(1, 16384, { pattern: /^[A-Za-z0-9_-]+$/ }) } : {};
+  if (route === 'campaigns.get') Object.assign(properties, { send_by: scopeTime, send_after: scopeTime });
   if (route === 'contacts.list') Object.assign(properties, { topic, status: enumeration('OPT_IN', 'OPT_OUT') });
   if (route === 'audit.list') properties.month = string(6, 6, { pattern: /^\d{4}(?:0[1-9]|1[0-2])$/ });
   const value = assertResult(validateSchema(record(properties, route === 'audit.list' ? ['month'] : []), query));

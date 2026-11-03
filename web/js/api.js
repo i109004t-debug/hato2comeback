@@ -1,4 +1,12 @@
 export const ERROR_MESSAGES = Object.freeze({
+  OUTSIDE_APPROVED_WINDOW: '承認された送信期間の範囲外です。期間内の日時を指定してください。',
+  AUDIENCE_EXCEEDS_APPROVAL: '宛先が承認の最大件数を超えたため、送らずに承認待ちへ戻りました。範囲を見直して承認してください。',
+  CAPACITY_INSUFFICIENT: 'この配信は期限までに送り終えられません。管理者に1日の上限の引き上げを依頼するか、期限を延ばして承認し直してください。',
+  TOO_MANY_RECIPIENTS: '宛先がシステムの配信上限を超えています。管理者に確認してください。',
+  DEADLINE_PASSED: '送信期限を過ぎたため、残りを送らずに中止しました。',
+  SCHEDULE_DELAYED: '予約日時から15分を過ぎても開始していません。他の配信の状況を確認してください。',
+  UNKNOWN_REVIEW_OPEN: '結果不明の調査が3日を過ぎています。管理者が調べて判断を記録してください。',
+  EVENTS_MISSING: '受付件数に対して配送の記録が不足しています。管理者が記録を確認し、原因を直してください。',
   CONSENT_SOURCE_HAS_ADDRESS: '同意の取得経路にはメールアドレスを含めず、申込方法などを記入してください。',
   ERASE_CHECK_UNAVAILABLE: '完全削除の記録を確認できません。AWSの管理者が鍵の状態を確認してください。',
   UNSUPPORTED_SCHEMA: 'この記録の形式に対応していません。AWSの管理者が実行環境とコードの版を確認してください。',
@@ -48,13 +56,14 @@ export function isUncertainMutation(error) {
 }
 
 export function apiPath(path, query = {}) {
-  if (!/^\/(?:me|settings(?:\/delivery-check)?|topics|contacts(?:\/(?:get|update|unsubscribe|reconsent|erase))?|imports(?:\/[0-9A-HJKMNP-TV-Z]{26})?|campaigns(?:\/[0-9A-HJKMNP-TV-Z]{26}(?:\/(?:preview|test-send|submit|approve|reject|start|unschedule|pause|resume|cancel|review|stats|failures))?)?|audit)$/.test(path)) throw new ApiError('INVALID_REQUEST');
+  if (!/^\/(?:me|settings(?:\/delivery-check)?|topics|contacts(?:\/(?:get|update|unsubscribe|reconsent|erase))?|imports(?:\/[0-9A-HJKMNP-TV-Z]{26})?|campaigns(?:\/[0-9A-HJKMNP-TV-Z]{26}(?:\/(?:preview|test-send|submit|approve|reject|start|unschedule|pause|resume|cancel|review|stats|failures|unknowns))?)?|audit)$/.test(path)) throw new ApiError('INVALID_REQUEST');
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
-    if (!['limit', 'cursor', 'topic', 'status', 'month'].includes(key)) throw new ApiError('INVALID_REQUEST');
+    if (!['limit', 'cursor', 'topic', 'status', 'month', 'send_by', 'send_after'].includes(key)) throw new ApiError('INVALID_REQUEST');
     if (value !== undefined && value !== null && value !== '') {
       const text = String(value);
-      if (text.includes('@') || !/^[A-Za-z0-9_-]+$/.test(text)) throw new ApiError('INVALID_REQUEST');
+      const valid = ['send_by', 'send_after'].includes(key) ? /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(text) : /^[A-Za-z0-9_-]+$/.test(text);
+      if (text.includes('@') || !valid) throw new ApiError('INVALID_REQUEST');
       params.set(key, text);
     }
   }

@@ -1,12 +1,13 @@
 import { change, currentAction, output, readChunk, workflowStep } from '../state.js';
 
 import { reviewUnsupportedSchema } from '../../common/schema.js';
+import { unknownReviewFields, deleteSnapshot } from '../../common/campaign-lifecycle.js';
 
 export async function finish(event, runtime) {
   const { campaign_id: id, execution_arn: executionArn } = event;
   let campaign = await runtime.store.get('CAMPAIGN', id);
   if (await reviewUnsupportedSchema(runtime, campaign)) return output('REVIEW', { reason: 'UNSUPPORTED_SCHEMA' });
-  if (event.outcome === 'START_FAILED' && campaign?.status === 'APPROVED' && campaign.start_error) return output('START_FAILED');
+  if (event.outcome === 'START_FAILED' && ['APPROVED', 'PENDING_APPROVAL'].includes(campaign?.status) && campaign.start_error) return output('START_FAILED');
   if (!campaign || campaign.execution_arn !== executionArn) return output('CANCELLED');
   const outcome = event.outcome ?? event.result?.action;
   try {
@@ -15,17 +16,17 @@ export async function finish(event, runtime) {
       if (budget?.reason === 'WORKFLOW_HISTORY_LIMIT') return budget;
     }
     if (campaign.status === 'CANCELLED') {
-      if (!campaign.completed_at) campaign = await change(runtime, id, executionArn, ['CANCELLED'], { completed_at: new Date(runtime.now()).toISOString() });
+      campaign = await change(runtime, id, executionArn, ['CANCELLED'], (current) => ({ completed_at: current.completed_at ?? new Date(runtime.now()).toISOString(), ...unknownReviewFields(current, runtime.now()) }));
       return output('CANCELLED');
     }
     if (outcome === 'START_FAILED') return output('START_FAILED');
     if (outcome === 'CANCELLED') {
-      campaign = await change(runtime, id, executionArn, ['PAUSED', 'SENDING', 'QUEUED'], { status: 'CANCELLED', cancel_reason: 'WORKFLOW_CANCELLED', completed_at: new Date(runtime.now()).toISOString() });
+      campaign = await change(runtime, id, executionArn, ['PAUSED', 'SENDING', 'QUEUED'], (current) => ({ status: 'CANCELLED', cancel_reason: 'WORKFLOW_CANCELLED', completed_at: new Date(runtime.now()).toISOString(), ...unknownReviewFields(current, runtime.now()) }));
       return currentAction(campaign, executionArn) ?? output('REVIEW', { reason: 'UNEXPECTED_STATUS' });
     }
     if (outcome === 'DONE') {
       if (!(campaign.progress?.chunk >= campaign.chunks_total)) return output('REVIEW', { reason: 'INCOMPLETE_PROGRESS' });
-      campaign = await change(runtime, id, executionArn, ['SENDING'], { status: 'COMPLETED', completed_at: new Date(runtime.now()).toISOString() });
+      campaign = await change(runtime, id, executionArn, ['SENDING'], (current) => ({ status: 'COMPLETED', completed_at: new Date(runtime.now()).toISOString(), ...unknownReviewFields(current, runtime.now()) }));
       return currentAction(campaign, executionArn) ?? output(campaign.status === 'COMPLETED' ? 'DONE' : 'REVIEW');
     }
     const rawReason = event.reason ?? event.result?.reason ?? 'WORKER_FAILED';
@@ -59,6 +60,7 @@ export async function finish(event, runtime) {
         await runtime.lock.save(id, { next: Math.max(held?.next_send_at_ms ?? 0, runtime.now() + 1000 / campaign.rate_per_sec) });
       }
       await runtime.lock.release(id);
+      if (['COMPLETED', 'CANCELLED'].includes(latest.status) && latest.unknown_review?.status !== 'OPEN') await deleteSnapshot(runtime, latest);
     }
   }
 }

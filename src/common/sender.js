@@ -3,6 +3,7 @@ import { createTime, jstDate, nextJstDayAt0005, unixSeconds } from './time.js';
 import { normalizeEmail } from './email.js';
 import { pauseReason } from './precheck.js';
 import { contactMetadataKey, contactBlocked } from './contact-metadata.js';
+import { campaignDeadline } from './forecast.js';
 
 export function classifySendError(error) {
   const status = error.$metadata?.httpStatusCode;
@@ -53,7 +54,9 @@ export function createSender(deps) {
       if (campaign.status !== 'SENDING') return pause(campaign.status === 'PAUSED' ? campaign.pause_reason : 'STATE_CHANGED');
       if (campaign.review) return { type: 'CONFIG_ERROR', code: 'UNRESOLVED_REVIEW' };
       if (!Number.isFinite(Date.parse(campaign.started_at)) || Date.parse(campaign.started_at) > now()) return { type: 'CONFIG_ERROR', code: 'INVALID_START' };
-      if (now() - Date.parse(campaign.started_at) > currentConfig.max_pending_days * 86400000) return { type: 'EXPIRED' };
+      const deadline = campaignDeadline(campaign, currentConfig);
+      if (!deadline) return { type: 'CONFIG_ERROR', code: 'OUTSIDE_APPROVED_WINDOW' };
+      if (now() >= Date.parse(deadline)) return { type: 'EXPIRED' };
     }
     if (!currentConfig.sending_enabled) return pause('SENDING_DISABLED');
     if (deps.env !== 'prod' && !currentConfig.nonprod_allowlist.includes(context.address)) return { type: 'CONFIG_ERROR', code: 'RECIPIENT_NOT_ALLOWED_IN_ENV' };
@@ -124,6 +127,7 @@ export function createSender(deps) {
       if (daily.reserved_attempts > final.config.daily_send_cap) return waitDay();
       if (reservation.day !== jstDate(now()) || now() < limiter.next) continue;
       if (context.remainingTime && context.remainingTime() < 15000) return { type: 'YIELD' };
+      if (!context.test && now() >= Date.parse(campaignDeadline(final.campaign, final.config))) return { type: 'EXPIRED' };
       return {};
     }
   };

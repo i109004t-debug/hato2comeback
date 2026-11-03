@@ -188,7 +188,7 @@ for (const [cause, metrics, expected] of [
 ]) {
   test(`T-28 ${cause}を累計メトリクスから検知し停止・通知`, async () => {
     const f = fixture(); await f.prepare(); f.metricValues = metrics;
-    if (cause === '欠測') { f.setCampaign({ counts: { accepted: 200, failed: 0, unknown: 0 }, last_send_at: new Date(f.deps.now() - 901000).toISOString() }); }
+    if (cause === '欠測') { f.setCampaign({ counts: { accepted: 200, failed: 0, unknown: 0 }, started_at: new Date(f.deps.now() - 1800000).toISOString(), accepted_buckets: { [new Date(f.deps.now() - 1800000).toISOString().slice(0, 16) + 'Z']: 200 } }); }
     assert.equal((await f.send()).action, 'PAUSED'); assert.equal(f.getCampaign().pause_reason, expected);
     assert.ok(f.notices.some((entry) => entry.code === expected)); assert.equal(f.sends.length, 0);
   });
@@ -203,7 +203,7 @@ test('7.8 遅延5%超と購読設定変更2%超は通知だけで送信継続', 
 });
 
 test('T-44 日次予約後のクラッシュは枠を戻さず、テストと通常配信は同時送信しない', async () => {
-  const f = fixture({ cap: 1 }); await f.prepare();
+  const f = fixture({ count: 3, cap: 1 }); await f.prepare();
   f.ddb.afterUpdate = (_, item) => { if (item.PK === 'DAILY') throw new Error('crash after reservation'); };
   await assert.rejects(f.send(), { code: 'INTERNAL' });
   assert.equal(f.ddb.get('DAILY', jstDate(f.deps.now())).reserved_attempts, 1); assert.equal(f.sends.length, 0);
@@ -232,7 +232,7 @@ test('T-48 無履歴の少量テストは可能でも監視API故障・アラー
 
 test('T-48 終了済み配信の15分超のSend証跡欠測でも次の一般配信を拒否', async () => {
   const f = fixture();
-  f.ddb.set({ schema_version: 1, PK: 'CAMPAIGN', SK: ID2, campaign_id: ID2, status: 'COMPLETED', started_at: new Date(f.deps.now() - 1800000).toISOString(), completed_at: new Date(f.deps.now() - 1000000).toISOString(), counts: { accepted: 200 }, last_send_at: new Date(f.deps.now() - 1000000).toISOString() });
+  f.ddb.set({ schema_version: 1, version: 0, PK: 'CAMPAIGN', SK: ID2, campaign_id: ID2, status: 'COMPLETED', started_at: new Date(f.deps.now() - 1800000).toISOString(), completed_at: new Date(f.deps.now() - 1000000).toISOString(), counts: { accepted: 200 }, accepted_buckets: { [new Date(f.deps.now() - 1800000).toISOString().slice(0, 16) + 'Z']: 200 } });
   assert.equal((await f.prepare()).action, 'START_FAILED'); assert.equal(f.getCampaign().start_error, 'EVENTS_MISSING');
 });
 

@@ -21,7 +21,7 @@ test('T-52 INSERTを監査日時のUTCパスへ変換し、DynamoDB JSON・event
   assert.deepEqual(await f.invoke({ Records: [record('INSERT')] }), { status: 'DONE' });
   const input = f.puts[0]; const body = JSON.parse(input.Body);
   assert.equal(input.Bucket, 'vault'); assert.equal(input.ContentType, 'application/json');
-  assert.equal(input.Key, 'audit/2026/11/03/2026-11-03T01_02_03.004Z_ID.json');
+  assert.equal(input.Key, 'audit/2026/11/03/AUDIT%23202611/2026-11-03T01%3A02%3A03.004Z%23ID.json');
   assert.deepEqual(body.after, audit); assert.equal(body.eventID, 'stream:event-1');
   assert.equal(body.ts, audit.ts); assert.ok(body.stream_ts.endsWith('Z'));
   assert.equal(body.sha256, createHash('sha256').update(JSON.stringify({ after: audit })).digest('hex'));

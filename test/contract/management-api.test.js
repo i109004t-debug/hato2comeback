@@ -61,13 +61,13 @@ test('T-03 オリジン→access token→ルート→役割→入力の順序', 
 
 test('T-04 法定表示がない申請はテンプレート作成前に拒否', async () => {
   const f = managementFixture(); f.draft(); f.ddb.set({ ...f.org, legal: {} });
-  expectCode(await f.request(`POST ${f.campaignPath}/submit`, {}), 422, 'SETTINGS_INCOMPLETE');
+  expectCode(await f.request(`POST ${f.campaignPath}/submit`, f.scope()), 422, 'SETTINGS_INCOMPLETE');
   assert.equal(f.templates.size, 0); assert.equal(f.getCampaign().status, 'DRAFT');
 });
 
 test('6.4 固定テンプレート・ハッシュ・差出人を固定し、差戻し後は新しい版', async () => {
   const f = managementFixture(); f.draft();
-  let response = await f.request(`POST ${f.campaignPath}/submit`, {});
+  let response = await f.request(`POST ${f.campaignPath}/submit`, f.scope());
   assert.equal(response.statusCode, 200, response.body);
   assert.equal(response.json.status, 'PENDING_APPROVAL'); assert.match(response.json.content_sha256, /^[a-f0-9]{64}$/);
   const first = response.json.template_name;
@@ -76,7 +76,7 @@ test('6.4 固定テンプレート・ハッシュ・差出人を固定し、差�
   response = await f.request(`POST ${f.campaignPath}/preview`, {});
   assert.equal(response.json.text, template.Text);
   assert.equal((await f.request(`POST ${f.campaignPath}/reject`, { reason: '修正依頼' })).json.status, 'DRAFT');
-  response = await f.request(`POST ${f.campaignPath}/submit`, {});
+  response = await f.request(`POST ${f.campaignPath}/submit`, f.scope());
   assert.equal(response.json.rev, 2); assert.equal(f.templates.size, 2); assert.notEqual(response.json.template_name, first);
   assert.ok(audits(f).some((item) => item.action === 'CAMPAIGNS_SUBMIT'));
 });
@@ -85,25 +85,25 @@ test('6.4 テンプレート作成だけ成功した後の再申請は内容一�
   const f = managementFixture(); f.draft();
   const create = f.deps.ses.createEmailTemplate;
   f.deps.ses.createEmailTemplate = async (input) => { await create(input); throw failure('TimeoutError'); };
-  expectCode(await f.request(`POST ${f.campaignPath}/submit`, {}), 500, 'INTERNAL');
+  expectCode(await f.request(`POST ${f.campaignPath}/submit`, f.scope()), 500, 'INTERNAL');
   f.deps.ses.createEmailTemplate = create;
-  assert.equal((await f.request(`POST ${f.campaignPath}/submit`, {})).statusCode, 200);
+  assert.equal((await f.request(`POST ${f.campaignPath}/submit`, f.scope())).statusCode, 200);
   const g = managementFixture(); g.draft(); g.templates.set(`ht2-c-${ID}-1`, { Subject: '別の件名', Text: '別の本文' });
-  expectCode(await g.request(`POST ${g.campaignPath}/submit`, {}), 409, 'HASH_MISMATCH');
+  expectCode(await g.request(`POST ${g.campaignPath}/submit`, g.scope()), 409, 'HASH_MISMATCH');
 });
 
 test('T-05 自分の申請は管理者でも承認できない', async () => {
   const f = managementFixture(); f.draft();
-  const submitted = await f.request(`POST ${f.campaignPath}/submit`, {});
-  expectCode(await f.request(`POST ${f.campaignPath}/approve`, { content_sha256: submitted.json.content_sha256 }), 403, 'FORBIDDEN');
+  const submitted = await f.request(`POST ${f.campaignPath}/submit`, f.scope());
+  expectCode(await f.request(`POST ${f.campaignPath}/approve`, { ...f.scope(), content_sha256: submitted.json.content_sha256 }), 403, 'FORBIDDEN');
 });
 
 test('T-06 ハッシュ不一致を拒否し、別人が一致する内容だけ承認', async () => {
   const f = managementFixture(); f.draft();
-  const submitted = await f.request(`POST ${f.campaignPath}/submit`, {});
+  const submitted = await f.request(`POST ${f.campaignPath}/submit`, f.scope());
   f.sub = 'second';
-  expectCode(await f.request(`POST ${f.campaignPath}/approve`, { content_sha256: '0'.repeat(64) }), 409, 'HASH_MISMATCH');
-  const response = await f.request(`POST ${f.campaignPath}/approve`, { content_sha256: submitted.json.content_sha256 });
+  expectCode(await f.request(`POST ${f.campaignPath}/approve`, { ...f.scope(), content_sha256: '0'.repeat(64) }), 409, 'HASH_MISMATCH');
+  const response = await f.request(`POST ${f.campaignPath}/approve`, { ...f.scope(), content_sha256: submitted.json.content_sha256 });
   assert.equal(response.json.status, 'APPROVED'); assert.equal(response.json.approved_by, 'second');
 });
 
@@ -113,7 +113,7 @@ test('6.2 version競合・状態競合を拒否し、自動承認を監査', asy
   const updated = await f.request(`PATCH ${f.campaignPath}`, { version: 0, subject: '修正' });
   assert.equal(updated.json.version, 1);
   f.ddb.set({ ...f.org, approval_required: false });
-  const response = await f.request(`POST ${f.campaignPath}/submit`, {});
+  const response = await f.request(`POST ${f.campaignPath}/submit`, f.scope());
   assert.equal(response.json.status, 'APPROVED'); assert.equal(response.json.approved_by, 'AUTO');
   assert.ok(audits(f).some((item) => item.action === 'APPROVE' && item.details.approved_by === 'AUTO'));
   expectCode(await f.request(`PATCH ${f.campaignPath}`, { version: 2, subject: '再編集' }), 409, 'STATE_CONFLICT');
@@ -218,7 +218,7 @@ test('7.7 管理者の確認用クエリは対象宛先・campaign・日付の�
 });
 
 test('6.3 申請後プレビューはMIMEヘッダーの順序・multipartを処理しtextだけ返す', async () => {
-  const f = managementFixture(); f.draft(); await f.request(`POST ${f.campaignPath}/submit`, {});
+  const f = managementFixture(); f.draft(); await f.request(`POST ${f.campaignPath}/submit`, f.scope());
   f.deps.ses.testRenderEmailTemplate = async () => ({ RenderedTemplate: 'Content-Type: multipart/mixed; boundary="part"\r\n\r\n--part\r\nContent-Type: text/html\r\n\r\n<p>ignored</p>\r\n--part\r\nContent-Transfer-Encoding: base64\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n' + Buffer.from('日本語\n本文').toString('base64') + '\r\n--part--\r\n' });
   const response = await f.request(`POST ${f.campaignPath}/preview`, {});
   assert.equal(response.json.text, '日本語\n本文', response.body); assert.ok(!response.body.includes('ignored'));

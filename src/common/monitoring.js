@@ -1,5 +1,31 @@
 import { AppError } from './http.js';
 import { createTime } from './time.js';
+import { updateCampaign, conflict } from './records.js';
+
+const PERIOD = 300000;
+export const acceptedBucket = (time) => new Date(Math.floor(time / PERIOD) * PERIOD).toISOString().slice(0, 16) + 'Z';
+
+export function evaluateMissing(campaign, points, config, now) {
+  const cutoff = Math.floor((now - config.event_log_stale_seconds * 1000) / PERIOD) * PERIOD;
+  const buckets = Object.entries(campaign.accepted_buckets ?? {}).map(([key, count]) => {
+    const time = Date.parse(key);
+    assertHealthy(Number.isSafeInteger(count) && count >= 0 && Number.isFinite(time) && acceptedBucket(time) === key, 'MONITORING_UNAVAILABLE');
+    return { time, count };
+  }).filter(({ time }) => time + PERIOD <= cutoff);
+  const eligible = buckets.filter(({ count }) => count >= 20);
+  const times = new Set(eligible.flatMap(({ time }) => [time, time + PERIOD]));
+  const sum = (id, intervals) => [...intervals].reduce((total, time) => total + (points[id].get(time) ?? 0), 0);
+  const accepted = eligible.reduce((total, { count }) => total + count, 0);
+  const send = sum('send', times);
+  const incoming = sum('incoming', times);
+  const recent = buckets.filter(({ time }) => time >= cutoff - 3 * PERIOD);
+  const recentAccepted = recent.reduce((total, { count }) => total + count, 0);
+  const recentSend = sum('send', new Set(recent.map(({ time }) => time)));
+  const missing = Math.max(0, accepted - send, accepted - incoming, recentAccepted >= 20 ? recentAccepted - recentSend : 0);
+  const failed = accepted - send > Math.max(20, accepted * config.event_missing_ratio) || accepted - incoming > Math.max(20, accepted * config.event_missing_ratio) || recentAccepted >= 20 && recentSend < recentAccepted * 0.5;
+  const last = [...points.send].filter(([, value]) => value > 0).map(([time]) => time).sort((a, b) => b - a)[0];
+  return { events_checked_at: new Date(now).toISOString(), events_last_seen_at: last === undefined ? campaign.events_last_seen_at ?? null : acceptedBucket(last), events_missing: missing, events_status: accepted >= 20 || recentAccepted >= 20 ? failed ? 'MISSING' : 'OK' : 'INSUFFICIENT_DATA' };
+}
 
 export function monitoringAlarmNames(env) {
   return ['firehose-delivery', 'firehose-freshness', 'rendering-or-reject'].map((name) => `ht2-${env}-${name}`);
@@ -39,13 +65,48 @@ export function createMonitoring(deps) {
     } while (token);
     return Object.fromEntries(Object.entries(values).map(([id, points]) => [id, points.length ? points.reduce((a, b) => a + b, 0) : null]));
   };
-  const checkEvidence = (campaign, metrics, config) => {
-    const last = Date.parse(campaign.last_send_at ?? campaign.updated_at ?? campaign.completed_at ?? campaign.started_at);
-    assertHealthy(Number.isFinite(last), 'MONITORING_UNAVAILABLE');
-    if ((campaign.counts?.accepted ?? 0) >= config.campaign_min_sample && now() - last > config.event_log_stale_seconds * 1000) {
-      assertHealthy(['send', 'delivery', 'bounce', 'delay'].some((name) => metrics[name] > 0), 'EVENTS_MISSING');
+  const checkEvidence = async (campaign, config) => {
+    const checked = now();
+    const start = Math.floor(Date.parse(campaign.started_at) / PERIOD) * PERIOD;
+    const cutoff = Math.floor((checked - config.event_log_stale_seconds * 1000) / PERIOD) * PERIOD;
+    const points = { send: new Map(), incoming: new Map() };
+    if (cutoff > start) {
+      const stream = deps.eventStreamArn?.split(':deliverystream/')[1];
+      assertHealthy(typeof stream === 'string' && stream.length > 0, 'MONITORING_UNAVAILABLE');
+      const queries = [
+        { Id: 'send', MetricStat: { Metric: { Namespace: 'AWS/SES', MetricName: 'Send', Dimensions: [{ Name: 'campaign', Value: campaign.campaign_id }] }, Period: 300, Stat: 'Sum' }, ReturnData: true },
+        { Id: 'incoming', MetricStat: { Metric: { Namespace: 'AWS/Firehose', MetricName: 'IncomingRecords', Dimensions: [{ Name: 'DeliveryStreamName', Value: stream }] }, Period: 300, Stat: 'Sum' }, ReturnData: true },
+      ];
+      let token;
+      const seen = new Set();
+      do {
+        const page = await cloudwatch.getMetricData({ StartTime: new Date(start), EndTime: new Date(cutoff + PERIOD), MetricDataQueries: queries, ScanBy: 'TimestampAscending', ...(token ? { NextToken: token } : {}) });
+        assertHealthy(!page.Messages?.length, 'MONITORING_UNAVAILABLE');
+        for (const id of Object.keys(points)) {
+          const result = page.MetricDataResults?.find((item) => item.Id === id);
+          assertHealthy((result?.StatusCode === 'Complete' || page.NextToken && result?.StatusCode === 'PartialData') && !result.Messages?.length && Array.isArray(result.Values) && Array.isArray(result.Timestamps) && result.Values.length === result.Timestamps.length, 'MONITORING_UNAVAILABLE');
+          for (let i = 0; i < result.Values.length; i += 1) {
+            const time = new Date(result.Timestamps[i]).getTime();
+            const value = result.Values[i];
+            assertHealthy(Number.isFinite(time) && time % PERIOD === 0 && time >= start && time < cutoff + PERIOD && Number.isFinite(value) && value >= 0, 'MONITORING_UNAVAILABLE');
+            points[id].set(time, (points[id].get(time) ?? 0) + value);
+          }
+        }
+        token = page.NextToken;
+        assertHealthy(!token || !seen.has(token), 'MONITORING_UNAVAILABLE');
+        if (token) seen.add(token);
+      } while (token);
     }
-    assertHealthy(!(metrics.rendering > 0 || metrics.reject > 0), 'CONTENT_ERROR');
+    const fields = evaluateMissing(campaign, points, config, checked);
+    let saved = false;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const current = await store.get('CAMPAIGN', campaign.campaign_id);
+      if (!current || Date.parse(current.events_checked_at) > checked) { saved = true; break; }
+      try { await updateCampaign({ ...deps, store, now }, current, [current.status], fields); saved = true; break; } catch (error) { if (!conflict(error)) throw error; }
+    }
+    assertHealthy(saved, 'MONITORING_UNAVAILABLE');
+    assertHealthy(fields.events_status !== 'MISSING', 'EVENTS_MISSING');
+    return fields;
   };
   return {
     async check({ campaign, config, test = false, deliveryValid = false, checkRatios = false, recent = false, daily = false }) {
@@ -64,7 +125,8 @@ export function createMonitoring(deps) {
         }
         if (campaign?.started_at) {
           const metrics = await totals(campaign);
-          checkEvidence(campaign, metrics, config);
+          assertHealthy(!(metrics.rendering > 0 || metrics.reject > 0), 'CONTENT_ERROR');
+          if (checkRatios || daily) await checkEvidence(campaign, config);
           if (checkRatios) {
             const denominator = (metrics.bounce ?? 0) + (metrics.delivery ?? 0);
             assertHealthy(!(denominator >= config.campaign_min_sample && metrics.bounce / denominator > config.campaign_bounce_pause_ratio), 'CAMPAIGN_BOUNCE');
@@ -74,12 +136,18 @@ export function createMonitoring(deps) {
           }
         }
         if (recent) {
+          let failure;
           for await (const page of store.queryPages({ KeyConditionExpression: 'PK = :pk', ExpressionAttributeValues: { ':pk': { S: 'CAMPAIGN' } } })) {
             for (const item of page.items) {
-              if (!['COMPLETED', 'CANCELLED'].includes(item.status) || !item.started_at || (item.counts?.accepted ?? 0) < config.campaign_min_sample || !(Date.parse(item.completed_at) >= now() - 7 * 86400000)) continue;
-              checkEvidence(item, await totals(item), config);
+              if (!['COMPLETED', 'CANCELLED'].includes(item.status) || !item.started_at || !(Date.parse(item.completed_at) >= now() - 7 * 86400000)) continue;
+              try {
+                const metrics = await totals(item);
+                await checkEvidence(item, config);
+                assertHealthy(!(metrics.rendering > 0 || metrics.reject > 0), 'CONTENT_ERROR');
+              } catch (error) { failure ??= error; }
             }
           }
+          if (failure) throw failure;
         }
         return { checkedAt: now() };
       } catch (error) {

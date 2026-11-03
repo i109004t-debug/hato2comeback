@@ -162,9 +162,10 @@ test('5.4 完了記録の後に解放が失敗しても次の日次点検で解�
 
 test('13.5 バックアップの保存失敗は購読者数を更新せず、他の日次点検を続ける', async () => {
   const f = managementFixture(); f.onPut = (input) => { if (input.Key.startsWith('backups/')) throw failure('TimeoutError'); };
+  const previous = f.ddb.get('SETTINGS', 'TOPIC_COUNTS');
   const response = await f.worker({ mode: 'daily' });
   assert.equal(response.results.backup, 'FAIL'); assert.equal(response.results.authentication, 'PASS');
-  assert.equal(f.ddb.get('SETTINGS', 'TOPIC_COUNTS'), undefined);
+  assert.deepEqual(f.ddb.get('SETTINGS', 'TOPIC_COUNTS'), previous);
   assert.ok(f.notices.some((item) => item.code === 'DAILY_FAILED'));
 });
 
@@ -292,7 +293,7 @@ test('13.4 7日停止は中止し、期限切れロックは解放せず通知',
 
 test('7.8 日次で終了配信のSend欠測を通知し、次の一般配信を拒否', async () => {
   const f = managementFixture();
-  f.setCampaign({ status: 'COMPLETED', counts: { accepted: 200 }, started_at: new Date(f.deps.now() - 3600000).toISOString(), completed_at: new Date(f.deps.now() - 1800000).toISOString(), last_send_at: new Date(f.deps.now() - 1800000).toISOString() });
+  f.setCampaign({ status: 'COMPLETED', counts: { accepted: 200 }, started_at: new Date(f.deps.now() - 3600000).toISOString(), completed_at: new Date(f.deps.now() - 1800000).toISOString(), accepted_buckets: { [new Date(f.deps.now() - 3600000).toISOString().slice(0, 16) + 'Z']: 200 } });
   await f.worker({ mode: 'daily' });
   assert.ok(f.notices.some((item) => item.code === 'EVENTS_MISSING'));
   const id2 = '01K9542S00BBBBBBBBBBBBBBBB';

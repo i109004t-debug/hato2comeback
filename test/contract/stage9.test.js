@@ -139,7 +139,7 @@ for (const schema of [2, '1', undefined]) test(`T-69 APIは未知の配信・取
   if (schema === undefined) delete item.schema_version;
   f.ddb.set(item);
   const result = await f.request(`GET /imports/${id}`); assert.equal(result.statusCode, 409); assert.equal(result.json.error_code, 'UNSUPPORTED_SCHEMA');
-  assert.equal((await f.request(`POST ${f.campaignPath}/submit`, {})).json.error_code, 'UNSUPPORTED_SCHEMA');
+  assert.equal((await f.request(`POST ${f.campaignPath}/submit`, f.scope())).json.error_code, 'UNSUPPORTED_SCHEMA');
 });
 
 for (const mode of ['prepare', 'send', 'finish', 'import']) test(`T-69 worker/${mode}は未知の版をNEEDS_REVIEWへ保存して送信・取込を始めない`, async () => {

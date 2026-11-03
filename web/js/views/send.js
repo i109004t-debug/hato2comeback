@@ -23,7 +23,7 @@ export function primaryAction(campaign, user, { busy = false, dirty = false, sta
   else if (stale) reason = '他の人が先に操作しました。画面を読み込み直してください。';
   else if (action[0] === 'approve') {
     if (!hasRole(user, 'admin', 'approver')) reason = '承認できるのは管理者・承認者です。';
-    else if (!campaign.submitted_by || campaign.submitted_by === user?.sub) reason = '申請者とは別の人が承認してください。';
+    else if (campaign.approval_required !== false && (!campaign.submitted_by || campaign.submitted_by === user?.sub)) reason = '申請者とは別の人が承認してください。';
     else if (!/^[a-f0-9]{64}$/.test(campaign.content_sha256 ?? '') || previewHash !== campaign.content_sha256 || !confirmed) reason = '固定した内容とハッシュを確認してください。';
   } else if (!canSend(user)) reason = 'この操作は管理者・配信担当が行います。';
   else if (!campaign?.campaign_id || dirty) reason = '先に下書きを保存してください。';
@@ -35,7 +35,7 @@ export function controlPolicy(campaign, user, blocked = false) {
   const operator = canOperate(user);
   const enable = (condition, reason) => ({ enabled: !blocked && condition, reason: blocked ? '処理中、または操作結果の確認が必要です。' : condition ? '' : reason });
   return {
-    pause: enable(operator && state === 'SENDING', operator ? '一時停止できるのは送信中の配信です。' : '一時停止は管理者・配信担当・承認者が行います。'),
+    pause: enable(operator && ['SENDING', 'QUEUED'].includes(state), operator ? '一時停止できるのは準備中・送信中の配信です。' : '一時停止は管理者・配信担当・承認者が行います。'),
     resume: enable(state === 'PAUSED' && (campaign.pause_reason === 'USER' ? operator : hasRole(user, 'admin')), state === 'PAUSED' && campaign.pause_reason !== 'USER' ? 'システムが止めた配信は、管理者が原因を直して再開してください。' : '再開できるのは一時停止中の配信です。'),
     cancel: enable(operator && ['APPROVED', 'SCHEDULED', 'QUEUED', 'SENDING', 'PAUSED', 'NEEDS_REVIEW'].includes(state), operator ? '現在の状態では中止できません。' : '中止は管理者・配信担当・承認者が行います。'),
     unschedule: enable(canSend(user) && state === 'SCHEDULED', '予約の取消は予約済みの配信を管理者・配信担当が操作します。'),
@@ -59,6 +59,23 @@ export function scheduleInput(mode, value, now = Date.now()) {
 
 export const isOnTheHour = (value) => !!fromJstInput(value) && value.slice(14, 16) === '00';
 export const hasShortUrl = (value) => /https?:\/\/(?:bit\.ly|t\.co|tinyurl\.com|goo\.gl|is\.gd|ow\.ly)(?:[/?#]|$)/i.test(value);
+
+export function scopeDefaults(estimate, now = Date.now()) {
+  return { max_recipients: Math.max(100, Math.min(100000, Math.ceil((estimate ?? 0) * 1.2 / 100) * 100)), send_by: new Date(now + 7 * 86400000).toISOString() };
+}
+
+export function scopeInput(max, by, after = '', now = Date.now()) {
+  const max_recipients = Number(max);
+  const send_by = fromJstInput(by);
+  const send_after = after ? fromJstInput(after) : undefined;
+  if (!Number.isSafeInteger(max_recipients) || max_recipients < 1 || max_recipients > 100000 || !send_by || Date.parse(send_by) < now + 3600000 || Date.parse(send_by) > now + 90 * 86400000 || after && (!send_after || Date.parse(send_after) >= Date.parse(send_by))) throw new ApiError('INVALID_REQUEST', 400, '', ['最大件数・送信期限・開始日時']);
+  return { max_recipients, send_by: new Date(send_by).toISOString(), ...(send_after ? { send_after: new Date(send_after).toISOString() } : {}) };
+}
+
+export function forecastText(forecast) {
+  if (!forecast) return '完了見込みを取得できません。更新して確認してください。';
+  return `対象 ${formatCount(forecast.assumptions.recipients)}件・期限までに送れる見込み 約${formatCount(forecast.capacity_until_deadline)}件。${forecast.completes ? `完了見込み：${formatTime(forecast.finish_estimate)}` : `期限までに送り終えられません（不足 約${formatCount(forecast.shortfall)}件）`}。送信枠は日ごとの概算で、実際の完了を保証しません。`;
+}
 
 export function validateDraft(input) {
   const body = input.body_text.replace(/\r\n?/g, '\n');
@@ -105,6 +122,9 @@ export async function mount(ctx, id) {
   let failuresLoading = false;
   let fixedLoading = false;
   let loading = false;
+  let scopeDirty = false;
+  let scopeForecast;
+  const readScope = () => scopeInput(q('[data-max-recipients]').value, q('[data-send-by]').value, q('[data-send-after]').value);
   const topicOptions = ctx.topics.items.map((topic) => [topic.TopicName, topic.DisplayName]);
   fillSelect(form.elements.topic, topicOptions);
   q('[data-at]').value = defaultSchedule();
@@ -133,6 +153,8 @@ export async function mount(ctx, id) {
       CREATE_SCHEDULE_UNCONFIRMED: '要確認：予約の有無を確認できません。管理者が確認してください。',
     }[campaign.start_error] ?? errorText(new ApiError(campaign.start_error)));
     if (campaign.reject_reason) notes.push(`差戻しの理由：${campaign.reject_reason}`);
+    if (campaign.cancel_reason === 'DEADLINE_PASSED') notes.push(`送信期限を過ぎたため中止しました。未送信 ${formatCount(campaign.unsent_count)}件。`);
+    if (campaign.schedule_delayed_notified_at) notes.push('予約日時から15分を過ぎても始まらなかったため、管理者へ通知しました。');
     if (campaign.scheduled_at && campaign.status === 'SCHEDULED') notes.push(`予約日時：${formatTime(campaign.scheduled_at)}`);
     if (stale) notes.push('他の人が先に操作しました。入力内容を控えてから画面を読み込み直してください。');
     setText(root, '[data-state-note]', notes.join('\n'));
@@ -166,6 +188,23 @@ export async function mount(ctx, id) {
     q('[data-progress]').replaceChildren(...progressLines(campaign, stats).flatMap(([label, value]) => [element('dt', label), element('dd', value)]));
     q('[data-review]').hidden = campaign.status !== 'NEEDS_REVIEW' || !hasRole(ctx.user, 'admin');
     q('[data-review-submit]').disabled = blocked || !hasRole(ctx.user, 'admin');
+    const editableScope = draft && canSend(ctx.user) || ['PENDING_APPROVAL', 'APPROVED'].includes(campaign.status) && hasRole(ctx.user, 'admin', 'approver');
+    q('[data-scope]').disabled = blocked || !editableScope;
+    q('[data-forecast-update]').disabled = blocked || !campaign.campaign_id;
+    q('[data-reapprove]').hidden = campaign.status !== 'APPROVED' || !hasRole(ctx.user, 'admin', 'approver');
+    q('[data-reapprove]').disabled = blocked || renderedHash !== campaign.content_sha256 || !q('[data-confirm-content]').checked || campaign.approval_required !== false && campaign.submitted_by === ctx.user.sub;
+    const scope = campaign.approval_scope ?? campaign.proposed_scope;
+    setText(root, '[data-approved-scope]', scope ? `${campaign.approval_scope ? '承認済み' : '提案'}：最大${formatCount(scope.max_recipients)}件・${formatTime(scope.send_after)}から${formatTime(scope.send_by)}まで` : '申請時に最大件数と送信期間を提案します。');
+    setText(root, '[data-forecast]', `${campaign.started_at ? '残り件数の見込み' : '前日時点の購読者数による概算'}：${scopeDirty && !scopeForecast ? '入力を変更しました。「完了見込みを更新」で確認してください。' : forecastText(scopeForecast ?? campaign.forecast)}`);
+    setText(root, '[data-deadline]', campaign.deadline_at ? `送信期限：${formatTime(campaign.deadline_at)}・未送信 ${formatCount(campaign.unsent_count)}件` : '');
+    const events = stats.events_status ?? campaign.events_status;
+    setText(root, '[data-events]', `配送記録：${events === 'MISSING' ? `欠測の疑い（推定${formatCount(stats.events_missing ?? campaign.events_missing)}件）` : events === 'OK' ? '欠測の判定で問題は見つかっていません' : '件数が少ないため判定していません'}。点検：${formatTime(stats.events_checked_at ?? campaign.events_checked_at)}・最後のSend区間：${formatTime(stats.events_last_seen_at ?? campaign.events_last_seen_at)}`);
+    const review = campaign.unknown_review;
+    q('[data-unknown-review]').hidden = !review;
+    q('[data-unknown-admin]').hidden = review?.status !== 'OPEN' || !hasRole(ctx.user, 'admin');
+    q('[data-unknown-submit]').disabled = blocked;
+    setText(root, '[data-unknown-status]', review ? `${review.status === 'OPEN' ? '調査中' : '調査終了'}：${formatCount(review.count)}件・開始 ${formatTime(review.opened_at)}` : '');
+    q('[data-unknown-decisions]').replaceChildren(...(review?.decisions ?? []).map((d) => element('li', `${formatTime(d.at)}・${d.by}・${d.decision === 'NO_RESEND' ? '送り直さず終了' : '継続'}・SES受付確認 ${formatCount(d.ses_accepted_count)}件・${d.note}`)));
     footer();
   }
 
@@ -208,7 +247,7 @@ export async function mount(ctx, id) {
     q('[data-failures-next]').disabled = true;
     try {
       const page = await ctx.api.request(`/campaigns/${campaign.campaign_id}/failures`, { query: { limit: 50, cursor } });
-      tableRows(q('[data-failures]'), page.items.map((item) => [item.m, resultLabel(item.r), item.c, formatTime(item.t)]));
+      tableRows(q('[data-failures]'), page.items.map((item) => [hasRole(ctx.user, 'admin') ? item.email ?? item.m : item.m, resultLabel(item.r), item.c, formatTime(item.t)]));
       failureCursor = page.cursor;
       failurePageCursor = cursor;
       q('[data-failures-section]').hidden = false;
@@ -218,6 +257,12 @@ export async function mount(ctx, id) {
   function populate() {
     for (const name of ['topic', 'subject', 'body_text']) if (campaign[name] !== undefined) form.elements[name].value = campaign[name];
     if (campaign.scheduled_at) { q('[data-mode]').value = 'SCHEDULED'; q('[data-at]').value = jstInput(campaign.scheduled_at); }
+    if (!scopeDirty) {
+      const scope = campaign.approval_scope ?? campaign.proposed_scope ?? scopeDefaults(campaign.audience_estimate ?? ctx.topics.items.find((t) => t.TopicName === campaign.topic)?.subscribers);
+      q('[data-max-recipients]').value = scope.max_recipients;
+      q('[data-send-by]').value = jstInput(scope.send_by);
+      q('[data-send-after]').value = scope.send_after ? jstInput(scope.send_after) : '';
+    }
   }
 
   async function load(initial = false) {
@@ -266,6 +311,7 @@ export async function mount(ctx, id) {
   async function action(name, body = {}) {
     const result = await ctx.api.request(`/campaigns/${campaign.campaign_id}/${name}`, { method: 'POST', body });
     campaign = result;
+    scopeDirty = false; scopeForecast = undefined;
     stats = { counts: campaign.counts, metrics: null };
     dirty = false;
     renderedHash = '';
@@ -319,7 +365,7 @@ export async function mount(ctx, id) {
   on(root, '[data-primary]', 'click', () => {
     const primary = primaryAction(campaign, ctx.user, { busy: gate.busy || loading, dirty, stale, uncertain, previewHash: renderedHash, confirmed: q('[data-confirm-content]').checked });
     if (!primary.enabled) return;
-    perform(() => action(primary.action, primary.action === 'approve' ? { content_sha256: renderedHash } : primary.action === 'start' ? scheduleInput(q('[data-mode]').value, q('[data-at]').value) : {}), { mutation: true });
+    perform(() => action(primary.action, primary.action === 'approve' ? { ...readScope(), content_sha256: renderedHash } : primary.action === 'start' ? scheduleInput(q('[data-mode]').value, q('[data-at]').value) : readScope()), { mutation: true });
   });
   for (const name of ['pause', 'unschedule', 'resume', 'cancel', 'reject']) on(root, `[data-${name}]`, 'click', () => {
     if (!controlPolicy(campaign, ctx.user, gate.busy || loading || uncertain || stale)[name].enabled) return;
@@ -347,8 +393,26 @@ export async function mount(ctx, id) {
     }, { mutation: true });
   });
   on(root, '[data-failures-next]', 'click', () => perform(() => loadFailures(failureCursor)));
+  for (const selector of ['[data-max-recipients]', '[data-send-by]', '[data-send-after]']) on(root, selector, 'input', () => { scopeDirty = true; scopeForecast = undefined; render(); });
+  on(root, '[data-forecast-update]', 'click', () => perform(async () => {
+    const scope = ['DRAFT', 'PENDING_APPROVAL', 'APPROVED'].includes(campaign.status) ? readScope() : {};
+    const value = await ctx.api.request(`/campaigns/${campaign.campaign_id}`, { query: { send_by: scope.send_by, send_after: scope.send_after } });
+    scopeForecast = value.forecast;
+    if (!scopeForecast) throw new ApiError('MONITORING_UNAVAILABLE');
+  }));
+  on(root, '[data-reapprove]', 'click', () => perform(() => action('approve', { ...readScope(), content_sha256: renderedHash }), { mutation: true }));
+  on(root, '[data-unknown-submit]', 'click', () => {
+    if (!hasRole(ctx.user, 'admin') || campaign.unknown_review?.status !== 'OPEN') return;
+    perform(async () => {
+      const note = q('[data-unknown-note]').value.trim();
+      if (!note || [...note].length > 500) throw new ApiError('INVALID_REQUEST', 400, '', ['判断の根拠']);
+      await action('unknowns', { decision: q('[data-unknown-decision]').value, note });
+      q('[data-unknown-note]').value = '';
+      await loadFailures();
+    }, { mutation: true });
+  });
   on(root, '[data-reload]', 'click', () => ctx.reload());
-  render();
+  populate(); render();
   if (id) {
     await load(true);
     ctx.addCleanup(startPolling(async () => { if (!gate.busy) await load(); }, { onError: (error) => {

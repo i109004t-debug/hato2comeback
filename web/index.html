@@ -52,6 +52,14 @@
         <aside>
           <section class="panel">
             <h2>配信日時</h2>
+            <fieldset data-scope><legend>承認の範囲</legend>
+              <label>最大件数<input data-max-recipients type="number" min="1" max="100000" step="1" required></label>
+              <label>送信期限（日本時間）<input data-send-by type="datetime-local" required></label>
+              <label>最も早い開始日時（任意・日本時間）<input data-send-after type="datetime-local"></label>
+              <p class="hint">期限は申請・承認の1時間後から90日後までです。開始後は最大7日で中止します。</p>
+            </fieldset>
+            <p data-approved-scope></p><p data-forecast></p><button data-forecast-update type="button">完了見込みを更新</button>
+            <button data-reapprove type="button" hidden>範囲を変えて承認し直す</button>
             <label>配信方法<select data-mode disabled><option value="NOW">配信開始を押したら送る</option><option value="SCHEDULED">予約</option></select></label>
             <label>予約日時（日本時間）<input data-at type="datetime-local" step="60" disabled></label>
             <p data-hour-warning class="notice" hidden>00分は受信側が混み合います。05分など、毎正時を避けてください。</p>
@@ -60,13 +68,14 @@
             <button data-primary type="button" class="primary wide" disabled>承認申請</button><p data-primary-reason class="hint"></p>
             <div data-reject-area hidden><label>差戻しの理由<textarea data-reject-reason maxlength="1000" rows="3"></textarea></label><button data-reject type="button">差戻し</button></div>
           </section>
-          <section class="panel"><h2>配信状況</h2><p data-updated class="hint"></p><p data-next-at class="notice"></p><dl data-progress class="metrics"></dl><p class="hint">10秒ごとに更新。配送などの件数は数分遅れて反映されます。「配送」は受信側サーバーの受付で、受信トレイへの到達や開封を示しません。苦情にはGmail・iCloudの分は含まれません。</p>
+          <section class="panel"><h2>配信状況</h2><p data-updated class="hint"></p><p data-deadline></p><p data-events></p><p data-next-at class="notice"></p><dl data-progress class="metrics"></dl><p class="hint">10秒ごとに更新。配送などの件数は数分遅れて反映されます。「配送」は受信側サーバーの受付で、受信トレイへの到達や開封を示しません。苦情にはGmail・iCloudの分は含まれません。</p>
             <div data-remediation hidden><label>原因・是正内容・少量での再確認<textarea data-remediation-note maxlength="1000" rows="3"></textarea></label><label>確認の証跡（delivery-checks/ から始まる保存先）<input data-evidence autocomplete="off"></label></div>
             <div class="actions"><button data-unschedule type="button">予約の取消</button><button data-pause type="button">一時停止</button><button data-resume type="button">再開</button><button data-cancel type="button" class="danger">中止</button></div><p data-control-reason class="hint"></p>
           </section>
         </aside>
       </div>
       <section data-review hidden class="panel"><h2>要確認：管理者の判断が必要です</h2><p>配送の記録を確かめてください。Sendイベントがないことは、送られていない証拠にはなりません。不明の宛先へ自動では送り直しません。</p><p data-review-range></p><pre data-review-recipients class="mail-text"></pre><details><summary>配送の記録を確認するAthenaクエリ</summary><pre data-query class="mail-text"></pre></details><label>判断<select data-decision></select></label><p data-review-risk class="notice"></p><label>確認した内容・判断の理由<textarea data-review-note maxlength="1000" rows="3"></textarea></label><button data-review-submit type="button" class="danger">判断を確定</button></section>
+      <section data-unknown-review hidden class="panel"><h2>結果不明の調査</h2><p data-unknown-status></p><p>配送の記録にSendが見つからなくても、SESが受け付けていない証拠にはなりません。自動で送り直しません。元のアドレスは管理者だけが、宛先の保存期間30日以内に確認できます。</p><div data-unknown-admin hidden><label>判断<select data-unknown-decision><option value="HOLD">調査を継続</option><option value="NO_RESEND">送り直さず調査を終了</option></select></label><label>調べた内容・判断の根拠<textarea data-unknown-note maxlength="500" rows="3" required></textarea></label><button data-unknown-submit type="button">判断を記録</button></div><ul data-unknown-decisions></ul></section>
       <section data-failures-section hidden class="panel"><h2>失敗・不明・停止済みの宛先</h2><p>結果が不明な宛先へは自動で送り直しません。停止済みの宛先は送らず、失敗の件数には含めません。</p><div class="table-scroll"><table><thead><tr><th>宛先</th><th>分類</th><th>コード</th><th>時刻</th></tr></thead><tbody data-failures></tbody></table></div><button data-failures-next type="button" disabled>次へ</button></section>
     </section>
   </template>

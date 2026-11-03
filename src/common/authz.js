@@ -12,7 +12,7 @@ export const PERMISSIONS = Object.freeze(Object.fromEntries([
   [senders, ['contacts.create', 'contacts.update', 'contacts.unsubscribe', 'imports.create', 'imports.list', 'imports.get', 'campaigns.create', 'campaigns.update', 'campaigns.test-send', 'campaigns.submit', 'campaigns.start', 'campaigns.unschedule']],
   [approvers, ['campaigns.approve', 'campaigns.reject']],
   [operators, ['campaigns.preview', 'campaigns.pause', 'campaigns.cancel', 'campaigns.resume']],
-  [['admin'], ['settings.update', 'settings.delivery-check', 'contacts.reconsent', 'contacts.erase', 'campaigns.review', 'audit.list']],
+  [['admin'], ['settings.update', 'settings.delivery-check', 'contacts.reconsent', 'contacts.erase', 'campaigns.review', 'campaigns.unknowns', 'audit.list']],
 ].flatMap(([roles, operations]) => operations.map((operation) => [operation, Object.freeze([...roles])]))));
 
 export function authorize(user, operation, { pause_reason } = {}) {

@@ -160,6 +160,7 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
       describeKey: async () => ({ KeyMetadata: { KeyState: 'Enabled' } }),
     },
     s3: {
+      deleteObject: async (input) => { files.delete(input.Key); return {}; },
       putObject: async (input) => { await f.onPut?.(input); files.set(input.Key, input.Body); return {}; },
       getObject: async (input) => { if (!files.has(input.Key)) throw failure('NoSuchKey', 404); return { Body: files.get(input.Key) }; },
       headObject: async (input) => { if (!files.has(input.Key)) throw failure('NotFound', 404); return {}; },
@@ -179,7 +180,7 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
     },
     cloudwatch: {
       describeAlarms: async () => { if (f.alarmError) throw f.alarmError; return { MetricAlarms: f.alarms }; },
-      getMetricData: async (input) => { if (f.metricError) throw f.metricError; return { MetricDataResults: input.MetricDataQueries.map(({ Id }) => ({ Id, StatusCode: 'Complete', Values: f.metricValues[Id] ?? [] })) }; },
+      getMetricData: async (input) => { if (f.metricError) throw f.metricError; return { MetricDataResults: input.MetricDataQueries.map(({ Id }) => ({ Id, StatusCode: 'Complete', Values: f.metricValues[Id] ?? [], Timestamps: f.metricTimestamps?.[Id] ?? [] })) }; },
     },
   };
   const f = {
@@ -208,7 +209,8 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
   f.delivery = { status: 'PASS', passed_at: new Date(clock).toISOString(), by: 'admin', note: '承認上限はSSMの日次上限。観測不足を確認済み。', evidence_key: 'delivery-checks/check/evidence.json', cases: Object.fromEntries(DELIVERY_CASES.map((id) => [id, 'PASS'])), config_hash: f.configHash, dns_config_hash: f.auth.dns_config_hash };
   if (env === 'prod') { org.delivery_check = f.delivery; files.set(f.delivery.evidence_key, '{}'); }
   ddb.set(org); ddb.set(f.auth);
-  ddb.set({ schema_version: 1, PK: 'CAMPAIGN', SK: ID, campaign_id: ID, status: 'QUEUED', version: 0, topic: 'news', from: '=?UTF-8?B?5Lya5aCx?= <info@example.com>', reply_to: org.reply_to, template_name: `ht2-c-${ID}-1`, created_at: new Date(clock).toISOString() });
+  ddb.set({ PK: 'SETTINGS', SK: 'TOPIC_COUNTS', counts: { news: count }, counted_at: new Date(clock).toISOString() });
+  ddb.set({ schema_version: 1, PK: 'CAMPAIGN', SK: ID, campaign_id: ID, status: 'QUEUED', version: 0, topic: 'news', from: '=?UTF-8?B?5Lya5aCx?= <info@example.com>', reply_to: org.reply_to, template_name: `ht2-c-${ID}-1`, approval_scope: { max_recipients: 100000, send_after: new Date(clock).toISOString(), send_by: new Date(clock + 90 * 86400000).toISOString() }, created_at: new Date(clock).toISOString() });
   f.store = createDdb(deps);
   f.handler = createHandler(deps);
   f.prepare = (extra) => f.handler(f.event('prepare', extra), f.context);

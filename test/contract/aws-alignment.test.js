@@ -198,7 +198,7 @@ test('第8段階9 受付後にサンドボックスへ変わってもworkerが�
 });
 test('第8段階11 プレビューだけに解除URLのダミーを渡す', async () => {
   const f = managementFixture(); f.draft();
-  await f.request(`POST ${f.campaignPath}/submit`, {});
+  await f.request(`POST ${f.campaignPath}/submit`, f.scope());
   f.deps.ses.testRenderEmailTemplate = async (input) => {
     assert.deepEqual(JSON.parse(input.TemplateData), { amazonSESUnsubscribeUrl: '（配信停止のURLがここに入ります）' });
     return { RenderedTemplate: 'Content-Type: text/plain; charset=UTF-8\r\n\r\npreview' };

@@ -24,7 +24,7 @@ test('12.6 AWSアダプターはSDKを遅延読込し、許可するAPIだけを
     kms: 'generateMac describeKey',
     ses: 'getAccount getEmailIdentity getConfigurationSet getConfigurationSetEventDestinations getContactList listContacts getContact createContact updateContact deleteContact getSuppressedDestination createImportJob getImportJob createEmailTemplate getEmailTemplate testRenderEmailTemplate deleteEmailTemplate sendEmail',
     ddb: 'getItem putItem updateItem deleteItem query transactWriteItems batchGetItem',
-    s3: 'putObject getObject headObject',
+    s3: 'putObject getObject headObject deleteObject',
     sfn: 'startExecution describeExecution sendTaskSuccess sendTaskFailure',
     scheduler: 'createSchedule deleteSchedule getSchedule',
     cognito: 'adminGetUser adminListGroupsForUser',

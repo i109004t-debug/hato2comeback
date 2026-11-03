@@ -11,7 +11,7 @@ export const DELIVERY_CASES = ['T-25', 'T-26', 'T-27', 'T-28', 'T-30', 'T-31', '
 const stable = (value) => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map((name) => [name, item[name]])) : item);
 let codeHash;
 export function sendingConfigHash(settings) {
-  codeHash ??= createHash('sha256').update(['aws.js', 'config.js', 'contact-metadata.js', 'email.js', 'footer.js', 'sender.js', 'precheck.js', 'acceptance.js', '../api/routes/campaigns.js', '../worker/modes/prepare.js', '../worker/modes/daily.js'].map((file) => readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n')).digest('hex');
+  codeHash ??= createHash('sha256').update(['aws.js', 'config.js', 'contact-metadata.js', 'email.js', 'footer.js', 'sender.js', 'monitoring.js', 'forecast.js', 'campaign-lifecycle.js', '../worker/state.js', '../worker/modes/send.js', '../worker/modes/finish.js', 'precheck.js', 'acceptance.js', '../api/routes/campaigns.js', '../worker/modes/prepare.js', '../worker/modes/daily.js'].map((file) => readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n')).digest('hex');
   return createHash('sha256').update(stable({ ...settings, codeHash })).digest('hex');
 }
 
@@ -101,7 +101,7 @@ export function createPrecheck(deps) {
         }
         await monitoring.check({ campaign: options.campaign, config, test: options.test, deliveryValid, checkRatios: options.checkRatios, recent: options.recent !== false });
         assertHealthy(now() < cache.expires, 'MONITORING_UNAVAILABLE');
-        result = { ok: true, config, org, rate: Math.min(org.max_rate_per_sec, config.max_rate_per_sec, quota.MaxSendRate * Math.min(0.8, config.ses_rate_safety_factor)), quotaRemaining, sample: cache.generation, checkedAt: Math.min(started, cache.checkedAt), configHash, warnings };
+        result = { ok: true, config, org, quota, rate: Math.min(org.max_rate_per_sec, config.max_rate_per_sec, quota.MaxSendRate * Math.min(0.8, config.ses_rate_safety_factor)), quotaRemaining, sample: cache.generation, checkedAt: Math.min(started, cache.checkedAt), configHash, warnings };
       } catch (error) {
         const known = error instanceof AppError;
         result = { ok: false, code: known ? error.code : 'MONITORING_UNAVAILABLE', status: known ? error.status : 503, checkedAt: started };

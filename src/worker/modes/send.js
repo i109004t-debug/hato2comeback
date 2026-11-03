@@ -6,11 +6,14 @@ import { maskEmail } from '../../common/email.js';
 import { prepare } from './prepare.js';
 
 import { reviewUnsupportedSchema } from '../../common/schema.js';
+import { acceptedBucket } from '../../common/monitoring.js';
+import { expireCampaign } from '../../common/campaign-lifecycle.js';
 
 export async function send(event, runtime, context) {
   const { campaign_id: id, execution_arn: executionArn } = event;
   let campaign = await runtime.store.get('CAMPAIGN', id);
   if (await reviewUnsupportedSchema(runtime, campaign)) return output('REVIEW', { reason: 'UNSUPPORTED_SCHEMA' });
+  if (campaign?.execution_arn === executionArn) campaign = await expireCampaign(runtime, campaign, await runtime.config.get());
   if (campaign?.execution_arn === executionArn && campaign.status === 'QUEUED' && campaign.pause_phase === 'prepare') return prepare(event, runtime);
   if (campaign?.execution_arn === executionArn && ['SENDING', 'PAUSED'].includes(campaign.status)) {
     const budget = await workflowStep(runtime, id, executionArn, 'send');
@@ -27,11 +30,6 @@ export async function send(event, runtime, context) {
   if (campaign.status !== 'SENDING' || campaign.review) return output('REVIEW', { reason: campaign.review ? 'UNRESOLVED_REVIEW' : 'UNEXPECTED_STATUS' });
   if (campaign.progress.chunk >= campaign.chunks_total) return output('DONE');
   const config = await runtime.config.get();
-  if (runtime.now() - Date.parse(campaign.started_at) > config.max_pending_days * 86400000) {
-    await change(runtime, id, executionArn, ['SENDING'], { status: 'CANCELLED', cancel_reason: 'MAX_PENDING_DAYS' });
-    await runtime.lock.release(id);
-    return output('CANCELLED');
-  }
   const health = await runtime.precheck.run({ campaign, allowedStatuses: ['SENDING'], force: true, checkRatios: campaign.progress.chunk % 5 === 0, recent: true, remaining: 1 });
   if (!health.ok) return pause(runtime, id, executionArn, pauseReason(health.code), health.code);
   const held = await runtime.lock.acquire(id, config.lock_ttl_seconds);
@@ -46,6 +44,7 @@ export async function send(event, runtime, context) {
   const start = i;
   const limiter = { interval: 1000 / Math.min(campaign.rate_per_sec, health.rate), next: Math.max(runtime.now(), held.next_send_at_ms ?? 0), ...(Number.isFinite(held.last_send_at_ms) ? { lastStart: held.last_send_at_ms } : {}) };
   const pending = { accepted: 0, failed: 0, unknown: 0, skipped_blocked: 0 };
+  const pendingBuckets = {};
   const results = [];
   let unknownRun = 0;
   let lastSendAt;
@@ -63,7 +62,7 @@ export async function send(event, runtime, context) {
       await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: key, ContentType: 'application/x-ndjson', Body: results.map((item) => JSON.stringify(item)).join('\n') + '\n' });
       extra.result_keys = [...new Set([...(campaign.result_keys ?? []), key])];
     }
-    campaign = await flush(runtime, id, executionArn, { chunk: nextChunk, index }, pending, limiter, lastSendAt, { ...extra, ...(i > start ? { throttled_run: 0 } : {}), sender_state: sender.getState() });
+    campaign = await flush(runtime, id, executionArn, { chunk: nextChunk, index }, pending, limiter, lastSendAt, { ...extra, ...(i > start ? { throttled_run: 0 } : {}), sender_state: sender.getState() }, pendingBuckets);
     return currentAction(campaign, executionArn);
   };
   const release = async (action) => {
@@ -82,6 +81,7 @@ export async function send(event, runtime, context) {
       if (result.type !== 'SKIPPED') runtime.metrics.emit({ ACCEPTED: 'Accepted', FAILED: 'Failed', UNKNOWN: 'Unknown' }[result.type], 1);
       if (result.type !== 'ACCEPTED') results.push({ a: await contactMetadataKey(runtime, lines[i].e), m: maskEmail(lines[i].e), r: result.type, c: result.code, t: new Date(runtime.now()).toISOString(), ci: chunk, ix: i });
       if (result.type === 'ACCEPTED' || result.type === 'UNKNOWN') lastSendAt = new Date(limiter.lastStart).toISOString();
+      if (result.type === 'ACCEPTED') { const bucket = acceptedBucket(limiter.lastStart); pendingBuckets[bucket] = (pendingBuckets[bucket] ?? 0) + 1; }
       if (result.type === 'UNKNOWN') unknownRun += 1;
       if (result.type === 'ACCEPTED') unknownRun = 0;
       i += 1;
@@ -99,7 +99,7 @@ export async function send(event, runtime, context) {
       if (result.type === 'YIELD') return output('SEND');
       if (result.type === 'QUOTA' || result.type === 'SES_PAUSED') return pause(runtime, id, executionArn, result.type, result.code, limiter);
       if (result.type === 'EXPIRED') {
-        await change(runtime, id, executionArn, ['SENDING'], { status: 'CANCELLED', cancel_reason: 'MAX_PENDING_DAYS' });
+        campaign = await expireCampaign(runtime, await runtime.store.get('CAMPAIGN', id), await runtime.config.get());
         return release(output('CANCELLED'));
       }
       return output('REVIEW', { reason: result.code });

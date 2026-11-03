@@ -89,7 +89,7 @@ test('10.2 配信の本文スキーマとパラメーター・ページング', 
   assert.throws(() => validateRoute('campaigns.update', { version: 1 }, context));
   assert.throws(() => validateRoute('campaigns.test-send', { recipients: ['a@example.com'] }, context));
   assert.throws(() => validateRoute('campaigns.approve', { content_sha256: '0'.repeat(12) }, context));
-  assert.ok(validateRoute('campaigns.approve', { content_sha256: '0'.repeat(64) }, context));
+  assert.ok(validateRoute('campaigns.approve', { content_sha256: '0'.repeat(64), max_recipients: 1000, send_by: '2026-11-10T10:00:00Z' }, context));
   assert.throws(() => validateRoute('campaigns.review', { decision: 'OTHER', note: '確認' }, context));
   assert.ok(validateParams({ id: '01JC7Q00000000000000000000' }));
   assert.throws(() => validateParams({ id: 'invalid' }));

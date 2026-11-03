@@ -2,11 +2,12 @@ import { buildUpdate, campaignUpdate, createExpressions } from '../common/ddb.js
 import { normalizeEmail } from '../common/email.js';
 import { AppError } from '../common/http.js';
 import { assertSupportedSchema } from '../common/schema.js';
+import { unknownReviewFields } from '../common/campaign-lifecycle.js';
 
 export const isConflict = (error) => ['STATE_CONFLICT', 'VERSION_CONFLICT'].includes(error.code) || error.name === 'ConditionalCheckFailedException';
 export const output = (action, fields = {}) => ({ action, ...fields });
 
-export async function change(runtime, id, executionArn, statuses, set, match = () => true) {
+export async function change(runtime, id, executionArn, statuses, set, match = () => true, remove = []) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const campaign = await runtime.store.get('CAMPAIGN', id);
     assertSupportedSchema(campaign);
@@ -14,7 +15,7 @@ export async function change(runtime, id, executionArn, statuses, set, match = (
     try {
       return await runtime.store.update('CAMPAIGN', id, campaignUpdate({
         version: campaign.version, from: statuses,
-        set: { ...(typeof set === 'function' ? set(campaign) : set), updated_at: new Date(runtime.now()).toISOString() },
+        set: { ...(typeof set === 'function' ? set(campaign) : set), updated_at: new Date(runtime.now()).toISOString() }, remove,
       }));
     } catch (error) { if (!isConflict(error)) throw error; }
   }
@@ -41,7 +42,7 @@ export async function readChunk(runtime, campaign, chunk = campaign.progress.chu
   return lines;
 }
 
-export async function flush(runtime, campaignId, executionArn, progress, pending, limiter, lastSendAt, extra = {}) {
+export async function flush(runtime, campaignId, executionArn, progress, pending, limiter, lastSendAt, extra = {}, pendingBuckets = {}) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const current = await runtime.store.get('CAMPAIGN', campaignId);
     assertSupportedSchema(current);
@@ -51,13 +52,16 @@ export async function flush(runtime, campaignId, executionArn, progress, pending
     const ConditionExpression = `${expressions.equals('execution_arn', executionArn)} AND ${expressions.equals('version', current.version)} AND ${expressions.equals('schema_version', 1)}`;
     const counts = { ...current.counts };
     for (const field of ['accepted', 'failed', 'unknown', 'skipped_blocked']) counts[field] = (counts[field] ?? 0) + (pending[field] ?? 0);
+    const accepted_buckets = { ...current.accepted_buckets };
+    for (const [bucket, count] of Object.entries(pendingBuckets)) accepted_buckets[bucket] = (accepted_buckets[bucket] ?? 0) + count;
     try {
       if (extra.result_keys) extra.result_keys = [...new Set([...(current.result_keys ?? []), ...extra.result_keys])];
       const saved = await runtime.store.update('CAMPAIGN', campaignId, {
         ConditionExpression,
-        ...buildUpdate({ set: { ...extra, progress, counts, version: current.version + 1, updated_at: new Date(runtime.now()).toISOString(), ...(lastSendAt ? { last_send_at: lastSendAt } : {}) } }, expressions),
+        ...buildUpdate({ set: { ...extra, progress, counts, accepted_buckets, ...(['COMPLETED', 'CANCELLED'].includes(current.status) ? { ...unknownReviewFields({ ...current, counts }, runtime.now()), unsent_count: Math.max(0, (current.recipients_total ?? 0) - ['accepted', 'failed', 'unknown', 'skipped_blocked'].reduce((sum, field) => sum + (counts[field] ?? 0), 0)) } : {}), version: current.version + 1, updated_at: new Date(runtime.now()).toISOString(), ...(lastSendAt ? { last_send_at: lastSendAt } : {}) } }, expressions),
       });
       pending.accepted = 0; pending.failed = 0; pending.unknown = 0; pending.skipped_blocked = 0;
+      for (const bucket of Object.keys(pendingBuckets)) delete pendingBuckets[bucket];
       await runtime.lock.save(campaignId, limiter);
       return saved;
     } catch (error) { if (!isConflict(error)) throw error; }

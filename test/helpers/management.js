@@ -80,6 +80,7 @@ export function managementFixture(options = {}) {
     return { ...response, json: JSON.parse(response.body) };
   };
   f.campaignPath = `/campaigns/${ID}`;
+  f.scope = () => ({ max_recipients: 100000, send_by: new Date(f.deps.now() + 7 * 86400000).toISOString() });
   f.draft = (set = {}) => f.setCampaign({ status: 'DRAFT', subject: '会報', body_text: '本文\n', topic_display: '会報', rev: 0, ...set });
   f.importCsv = (email = 'new@example.com', extra = '') => `email,name,consent_at,consent_source,topics\n${email},会員,2026-01-01T00:00:00Z,フォーム,news\n${extra}`;
   f.receive = async (csv, idem = 'once') => f.request('POST /imports', undefined, { headers: { 'x-origin-verify': 'origin', 'content-type': 'text/csv; charset=utf-8', 'idempotency-key': idem }, body: csv });

@@ -1,4 +1,5 @@
 import { AppError, invalid } from './http.js';
+import { canTransition } from './campaign-transitions.js';
 
 const plain = (value) => value !== null && typeof value === 'object' && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 
@@ -106,11 +107,12 @@ export function buildUpdate({ set = {}, remove = [], add = {}, delete: del = {} 
   return { UpdateExpression: clauses.join(' '), ...expressions.attributes() };
 }
 
-export function campaignUpdate({ version, from, set = {} }) {
+export function campaignUpdate({ version, from, set = {}, remove = [] }) {
   if (!Number.isSafeInteger(version) || version < 0 || !Array.isArray(from) || !from.length || 'version' in set) throw new TypeError('Invalid campaign update');
+  if (set.status && from.some((status) => !canTransition(status, set.status))) throw new AppError('STATE_CONFLICT', 409, '許されない状態遷移です。');
   const expressions = createExpressions();
   const ConditionExpression = `${expressions.in('status', from)} AND ${expressions.equals('version', version)} AND ${expressions.equals('schema_version', 1)}`;
-  return { ConditionExpression, ...buildUpdate({ set: { ...set, version: version + 1 } }, expressions) };
+  return { ConditionExpression, ...buildUpdate({ set: { ...set, version: version + 1 }, remove }, expressions) };
 }
 
 export function key(PK, SK) {
