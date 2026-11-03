@@ -5,6 +5,7 @@ import { configDefaults } from '../../src/common/config.js';
 import { sendingConfigHash, REQUIRED_EVENTS, DELIVERY_CASES } from '../../src/common/precheck.js';
 import { monitoringAlarmNames } from '../../src/common/monitoring.js';
 import { createHandler } from '../../src/worker/handler.js';
+import { addressHash } from '../../src/common/log.js';
 
 export const ID = '01K9542S00AAAAAAAAAAAAAAAA';
 export const ID2 = '01K9542S00BBBBBBBBBBBBBBBB';
@@ -130,7 +131,7 @@ export function memoryDdb() {
   return api;
 }
 
-export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, time = Date.parse('2026-11-03T10:00:00Z') } = {}) {
+export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, registered = true, time = Date.parse('2026-11-03T10:00:00Z') } = {}) {
   const ddb = memoryDdb();
   const files = new Map();
   const sends = [];
@@ -141,6 +142,7 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
   let remaining = 900000;
   let clock = time;
   const addresses = Array.from({ length: count }, (_, i) => `member${i}@example.com`);
+  if (registered) for (const email of addresses) ddb.set({ PK: 'CONTACT_META', SK: addressHash(email, '7'.repeat(64)), kid: 'k1', version: 1, registration_state: 'ACTIVE', attributes: { v: 1, consent: { at: '2026-01-01T00:00:00Z', source: '入会フォーム' } }, blocked_all: false, blocked_topics: [] });
   const settings = { ...configDefaults(env), sending_enabled: true, nonprod_allowlist: addresses, batch_size: batchSize, progress_every: Math.min(20, batchSize), daily_send_cap: cap };
   const org = { PK: 'SETTINGS', SK: 'ORG', from_local: 'info', from_name: '会報', reply_to: 'support@example.com', legal: { sender_name: '会', address: '東京', contact: 'https://example.com' }, max_rate_per_sec: 10, version: 0, test_recipients: addresses.slice(0, 5) };
   const deps = {

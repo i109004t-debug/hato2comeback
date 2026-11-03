@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { unmarshall } from '../../src/common/ddb.js';
 import { fixture, failure, ID, ARN } from '../helpers/sending.js';
+import { addressHash } from '../../src/common/log.js';
 
 test('7.4 20通ごとの進捗・件数保存とバッチの完了位置', async () => {
   const f = fixture({ count: 45 }); assert.equal((await f.prepare()).action, 'SEND');
@@ -111,6 +112,7 @@ test('7.4 バッチ切替と停止・再開の境界でも送信開始間隔を�
 
 test('7.3 ページ全取得、重複・全停止・非許可宛先の除外と固定JSONL', async () => {
   const f = fixture({ count: 3, batchSize: 2 });
+  f.ddb.set({ PK: 'CONTACT_META', SK: addressHash('outsider@example.com', '7'.repeat(64)), registration_state: 'ACTIVE' });
   f.contactPages = [{ Contacts: [f.contacts[0], f.contacts[0], { ...f.contacts[1], UnsubscribeAll: true }], NextToken: '1' }, { Contacts: [f.contacts[2], { EmailAddress: 'outsider@example.com' }] }];
   assert.equal((await f.prepare()).action, 'SEND');
   assert.equal(f.getCampaign().recipients_total, 2); assert.equal(f.getCampaign().counts.excluded_allowlist, 1);

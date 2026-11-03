@@ -9,7 +9,7 @@ import { auditArchiveKey, readAuditArchive } from '../../src/common/audit-archiv
 import { unknownReviewFields } from '../../src/common/campaign-lifecycle.js';
 
 test('T-58 API-17/18は範囲必須、時刻境界と構成上限を検査する', async () => {
-  const f = managementFixture(); f.draft();
+  const f = managementFixture({ registered: true }); f.draft();
   for (const body of [{}, { ...f.scope(), max_recipients: 0 }, { ...f.scope(), send_by: new Date(f.deps.now() + 3599999).toISOString() }, { ...f.scope(), send_by: new Date(f.deps.now() + 90 * 86400000 + 1).toISOString() }, { ...f.scope(), send_after: f.scope().send_by }, { ...f.scope(), send_by: '2026-02-30T00:00:00Z' }]) assert.equal((await f.request(`POST ${f.campaignPath}/submit`, body)).statusCode, 400);
   f.settings.max_recipients_per_campaign = 10;
   assert.equal((await f.request(`POST ${f.campaignPath}/submit`, f.scope())).statusCode, 400);
@@ -25,7 +25,7 @@ test('T-58 API-17/18は範囲必須、時刻境界と構成上限を検査する
 });
 
 test('T-58 申請・承認の監査に概算と範囲を残し、同じ内容で承認し直せる', async () => {
-  const f = managementFixture(); f.draft();
+  const f = managementFixture({ registered: true }); f.draft();
   const submitted = await f.request(`POST ${f.campaignPath}/submit`, f.scope());
   f.sub = 'approver'; f.resetApi();
   let response = await f.request(`POST ${f.campaignPath}/approve`, { ...f.scope(), max_recipients: 80, content_sha256: submitted.json.content_sha256 });
@@ -42,7 +42,7 @@ test('T-58 申請・承認の監査に概算と範囲を残し、同じ内容で
 });
 
 for (const auto of [false, true]) test(`T-58 準備時の件数超過は1通も送らず範囲を消して承認待ち ${auto}`, async () => {
-  const f = managementFixture({ count: 3 });
+  const f = managementFixture({ registered: true, count: 3 });
   f.org.approval_required = !auto; f.ddb.set(f.org); f.draft();
   const submitted = (await f.request(`POST ${f.campaignPath}/submit`, { ...f.scope(), max_recipients: 2 })).json;
   if (!auto) { f.sub = 'another'; f.resetApi(); await f.request(`POST ${f.campaignPath}/approve`, { ...f.scope(), max_recipients: 2, content_sha256: submitted.content_sha256 }); }
@@ -62,7 +62,7 @@ for (const auto of [false, true]) test(`T-58 準備時の件数超過は1通も�
 });
 
 test('T-58 即時・予約は承認期間内、期限と等しい時刻は期間外', async () => {
-  const f = managementFixture();
+  const f = managementFixture({ registered: true });
   f.setCampaign({ status: 'APPROVED', approval_scope: { max_recipients: 100, send_after: new Date(f.deps.now() + 600000).toISOString(), send_by: new Date(f.deps.now() + 3600000).toISOString() } });
   for (const body of [{ mode: 'NOW' }, { mode: 'SCHEDULED', at: new Date(f.deps.now() + 300000).toISOString() }, { mode: 'SCHEDULED', at: new Date(f.deps.now() + 3600000).toISOString() }]) {
     const response = await f.request(`POST ${f.campaignPath}/start`, body);
@@ -83,7 +83,7 @@ test('T-57 準備後の実数で日次1000件・1万件を拒否し、APPROVED�
 });
 
 test('7.10 API-14の概算は先行配信を引き、入力中の期限でも読取計算できる', async () => {
-  const f = managementFixture({ count: 100 }); f.draft();
+  const f = managementFixture({ registered: true, count: 100 }); f.draft();
   f.ddb.set({ ...f.getCampaign(), SK: ID2, campaign_id: ID2, status: 'SENDING', recipients_total: 900, counts: { accepted: 50, failed: 10, unknown: 10, skipped_blocked: 30 } });
   const by = new Date(f.deps.now() + 3600000).toISOString();
   const response = await f.request(`GET ${f.campaignPath}`, undefined, { queryStringParameters: { send_by: by } });
@@ -113,7 +113,7 @@ test('7.4 20件ごとのflushは送信要求開始時刻の区間に1回だけ�
 });
 
 test('T-56 送信中と終了後の日次で同じ区間判定を使い、API-14/23に保存値を出す', async () => {
-  const f = managementFixture({ count: 1 }); await f.worker(f.event('prepare'), f.context);
+  const f = managementFixture({ registered: true, count: 1 }); await f.worker(f.event('prepare'), f.context);
   const start = f.deps.now() - 3600000;
   f.setCampaign({ started_at: new Date(start).toISOString(), accepted_buckets: { [acceptedBucket(start)]: 100 }, counts: { accepted: 100 }, progress: { chunk: 0, index: 0 } });
   assert.equal((await f.worker(f.event('send'), f.context)).action, 'PAUSED');
@@ -143,7 +143,7 @@ test('T-59 各送信の直前に期限を確かめ、以降を送らず未送信
 });
 
 for (const phase of ['prepare', 'paused', 'day', 'resume']) test(`T-59 ${phase}の継続でも期限経過後は送らない`, async () => {
-  const f = managementFixture({ count: 3 });
+  const f = managementFixture({ registered: true, count: 3 });
   if (phase !== 'prepare') await f.worker(f.event('prepare'), f.context);
   f.setCampaign({ ...(phase === 'paused' || phase === 'resume' ? { status: 'PAUSED', pause_reason: 'USER' } : {}), approval_scope: { ...f.getCampaign().approval_scope, send_by: new Date(f.deps.now()).toISOString() } });
   const response = phase === 'resume' ? await f.request(`POST ${f.campaignPath}/resume`, {}) : await f.worker(f.event(phase === 'prepare' ? 'prepare' : 'send'), f.context);
@@ -153,7 +153,7 @@ for (const phase of ['prepare', 'paused', 'day', 'resume']) test(`T-59 ${phase}�
 });
 
 test('T-59 ロック待ちの予約遅延は日次と準備で重複せず、期限切れなら0通で中止', async () => {
-  const f = managementFixture({ count: 1 });
+  const f = managementFixture({ registered: true, count: 1 });
   f.setCampaign({ status: 'SCHEDULED', scheduled_at: new Date(f.deps.now() - 900000).toISOString() });
   f.ddb.set({ PK: 'LOCK', SK: 'SEND', owner: 'other', expires_at_ms: f.deps.now() + 100000 });
   assert.equal((await f.worker(f.event('prepare'), f.context)).action, 'WAIT_LOCK');
@@ -168,7 +168,7 @@ test('T-59 ロック待ちの予約遅延は日次と準備で重複せず、期
 });
 
 async function unknownFixture() {
-  const f = managementFixture({ count: 2 });
+  const f = managementFixture({ registered: true, count: 2 });
   await f.worker(f.event('prepare'), f.context);
   f.onSend = (_, n) => { if (n === 1) throw failure('TimeoutError'); return { MessageId: 'ok' }; };
   await f.worker(f.event('send'), f.context);
@@ -230,7 +230,7 @@ test('8.6 snapshotの期限・欠落・誤った位置やHMACではアドレス�
 });
 
 for (const path of ['cancel', 'review', 'daily']) test(`8.6 ${path}で終了する経路にもOPENを作る`, async () => {
-  const f = managementFixture();
+  const f = managementFixture({ registered: true });
   f.setCampaign({ status: path === 'review' ? 'NEEDS_REVIEW' : 'PAUSED', counts: { unknown: 2 }, paused_at: new Date(f.deps.now() - 8 * 86400000).toISOString() });
   if (path === 'daily') await f.worker({ mode: 'daily' });
   else await f.request(`POST ${f.campaignPath}/${path}`, path === 'review' ? { decision: 'CANCEL', note: '中止' } : {});
@@ -239,7 +239,7 @@ for (const path of ['cancel', 'review', 'daily']) test(`8.6 ${path}で終了す�
 });
 
 test('8.6 中止と送信結果の保存が競合しても、最後のUNKNOWNを調査に含める', async () => {
-  const f = managementFixture({ count: 2 }); await f.worker(f.event('prepare'), f.context);
+  const f = managementFixture({ registered: true, count: 2 }); await f.worker(f.event('prepare'), f.context);
   f.onSend = async () => { await f.request(`POST ${f.campaignPath}/cancel`, {}); throw failure('TimeoutError'); };
   await f.worker(f.event('send'), f.context);
   assert.equal(f.getCampaign().unknown_review.count, 1);
@@ -281,7 +281,7 @@ test('8.6 NO_RESEND後の宛先削除に失敗しても日次処理で削除を�
 });
 
 test('7.10 APIの再開要求で期限を過ぎた待機タスクも終了させる', async () => {
-  const f = managementFixture({ count: 1 }); await f.worker(f.event('prepare'), f.context);
+  const f = managementFixture({ registered: true, count: 1 }); await f.worker(f.event('prepare'), f.context);
   f.setCampaign({ status: 'PAUSED', pause_reason: 'USER', task_token: 'private-token', approval_scope: { ...f.getCampaign().approval_scope, send_by: new Date(f.deps.now()).toISOString() } });
   assert.equal((await f.request(`POST ${f.campaignPath}/resume`, {})).json.status, 'CANCELLED');
   assert.equal(f.getCampaign().task_token, undefined);
@@ -290,7 +290,7 @@ test('7.10 APIの再開要求で期限を過ぎた待機タスクも終了させ
 });
 
 test('7.8 日次は先頭の配信が欠測でも後続配信の判定を保存する', async () => {
-  const f = managementFixture();
+  const f = managementFixture({ registered: true });
   const start = f.deps.now() - 3600000;
   const fields = { status: 'COMPLETED', started_at: new Date(start).toISOString(), completed_at: new Date(f.deps.now()).toISOString(), accepted_buckets: { [acceptedBucket(start)]: 100 } };
   f.setCampaign(fields);
@@ -301,7 +301,7 @@ test('7.8 日次は先頭の配信が欠測でも後続配信の判定を保存�
 });
 
 test('6.2 準備中の手動停止はprepare段階を記録し、再開はQUEUEDへ戻す', async () => {
-  const f = managementFixture();
+  const f = managementFixture({ registered: true });
   const paused = await f.request(`POST ${f.campaignPath}/pause`, {});
   assert.equal(paused.json.status, 'PAUSED');
   assert.equal(paused.json.pause_phase, 'prepare');
@@ -331,7 +331,7 @@ test('第9段階指摘 同じSKとtsでも異なるPKの偽項目は保管庫の
 });
 
 test('7.8 監視記録の条件更新もversionを条件にし、状態は変更しない', async () => {
-  const f = managementFixture(); await f.worker(f.event('prepare'), f.context);
+  const f = managementFixture({ registered: true }); await f.worker(f.event('prepare'), f.context);
   f.ddb.calls.length = 0;
   await f.worker(f.event('send'), f.context);
   const update = f.ddb.calls.find((input) => Object.values(input.ExpressionAttributeNames ?? {}).includes('events_checked_at'));

@@ -182,7 +182,7 @@ test('7.6 停止中の中止はCancelledで待ち合わせを解放し、トー�
 
 for (const [decision, index] of [['SKIP', 20], ['RESEND', 0]]) {
   test(`T-11 API-22 ${decision}は保存済み範囲から新しい実行で再開`, async () => {
-    const f = managementFixture({ count: 25 }); await f.prepare();
+    const f = managementFixture({ registered: true, count: 25 }); await f.prepare();
     f.setCampaign({ status: 'NEEDS_REVIEW', review: { chunk: 0, index_from: 0, index_to: 19, reason: 'WORKER_FAILED' } });
     const response = await f.request(`POST ${f.campaignPath}/review`, { decision, note: '配送記録のSendとログ遅延を確認して判断' });
     assert.equal(response.json.status, 'QUEUED', response.body); assert.equal(response.json.progress.index, index); assert.equal(f.getCampaign().review, undefined);
@@ -208,7 +208,7 @@ test('7.7 全件進捗保存後の異常では空の要確認範囲を安全に�
 });
 
 test('7.7 管理者の確認用クエリは対象宛先・campaign・日付の条件を含む', async () => {
-  const f = managementFixture({ count: 25 }); await f.prepare();
+  const f = managementFixture({ registered: true, count: 25 }); await f.prepare();
   f.setCampaign({ status: 'NEEDS_REVIEW', review: { chunk: 0, index_from: 3, index_to: 5, reason: 'WORKER_FAILED' } });
   const result = await f.request(`GET ${f.campaignPath}`);
   assert.equal(result.json.review_recipients.length, 3);
@@ -320,7 +320,7 @@ test('T-21 許可リスト外の個別登録とテスト送信を拒否', async 
 });
 
 test('6.6 APIのテストはSimple/Template、共有ロック・日次予約・UNKNOWN非再送', async () => {
-  const f = managementFixture({ count: 2 }); f.draft();
+  const f = managementFixture({ registered: true, count: 2 }); f.draft();
   let response = await f.request(`POST ${f.campaignPath}/test-send`, {});
   assert.equal(response.statusCode, 200, response.body); assert.ok(response.json.results.every((item) => item.status === 'ACCEPTED'));
   assert.equal(f.sends[0].input.Content.Simple.Subject.Charset, 'UTF-8');
@@ -374,7 +374,7 @@ test('8.1 結果は全8指標・Sum・粒度切替・60秒キャッシュ、欠�
 });
 
 test('8.2 S3保存後の進捗更新に失敗してもAPIは失敗・不明の証跡を取得できる', async () => {
-  const f = managementFixture({ count: 1 }); await f.prepare();
+  const f = managementFixture({ registered: true, count: 1 }); await f.prepare();
   f.onSend = () => { throw failure('TimeoutError'); };
   f.ddb.beforeUpdate = (input) => { if (input.Key.PK.S === 'CAMPAIGN' && Object.values(input.ExpressionAttributeNames).includes('progress')) throw failure('TimeoutError'); };
   await assert.rejects(f.send(), { code: 'INTERNAL' });

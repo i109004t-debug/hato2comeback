@@ -108,7 +108,7 @@ export async function importContacts(event, runtime) {
       return { status: 'DONE' };
     }
     for (let offset = 0; offset < accepted.length; offset += 20) {
-      const results = await Promise.allSettled(accepted.slice(offset, offset + 20).map((row) => ensureContactMetadata(runtime, { EmailAddress: row.email, AttributesData: JSON.stringify(row.attributes) })));
+      const results = await Promise.allSettled(accepted.slice(offset, offset + 20).map((row) => ensureContactMetadata(runtime, { EmailAddress: row.email, AttributesData: JSON.stringify(row.attributes) }, { newConsent: true })));
       const failed = results.find((result) => result.status === 'rejected');
       if (failed) throw failed.reason;
     }

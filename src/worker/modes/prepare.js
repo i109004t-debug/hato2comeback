@@ -3,7 +3,6 @@ import { normalizeEmail } from '../../common/email.js';
 import { change, output, currentAction, readChunk, boundedWait, workflowStep } from '../state.js';
 import { addressHash } from '../../common/log.js';
 import { applyContactMetadata } from '../../common/contact-metadata.js';
-import { isErased } from '../../common/erase.js';
 
 import { reviewUnsupportedSchema } from '../../common/schema.js';
 import { completionForecast, campaignDeadline } from '../../common/forecast.js';
@@ -58,7 +57,7 @@ export async function prepare(event, runtime) {
     for (const PK of ['CONTACT_META']) {
       for await (const page of runtime.store.queryPages({ KeyConditionExpression: 'PK = :pk', ExpressionAttributeValues: { ':pk': { S: PK } }, ConsistentRead: true })) {
         for (const item of page.items) {
-          metadata.set(item.SK, { erased: item.erased, blocked_all: item.blocked_all, blocked_topics: item.blocked_topics });
+          metadata.set(item.SK, { registration_state: item.registration_state, erased: item.erased, blocked_all: item.blocked_all, blocked_topics: item.blocked_topics });
         }
       }
     }
@@ -67,6 +66,7 @@ export async function prepare(event, runtime) {
     const seenAddresses = new Set();
     const seenTokens = new Set();
     let excluded = 0;
+    let excludedNoRecord = 0;
     let token;
     do {
       const page = await runtime.ses.listContacts({
@@ -76,15 +76,15 @@ export async function prepare(event, runtime) {
       });
       if (!Array.isArray(page.Contacts)) throw new Error('Invalid contacts response');
       for (const original of page.Contacts) {
-        const hash = addressHash(normalizeEmail(original.EmailAddress).email, secret.key);
-        if (await isErased(runtime, original.EmailAddress)) continue;
-        const contact = applyContactMetadata(original, metadata.get(hash));
-        if (contact.UnsubscribeAll === true) continue;
-        if (contact.TopicPreferences?.some((preference) => preference.TopicName === campaign.topic && preference.SubscriptionStatus !== 'OPT_IN')) continue;
-        const email = normalizeEmail(contact.EmailAddress).email;
-        if (email !== contact.EmailAddress) return fail('CONFIGURATION_INVALID');
+        const email = normalizeEmail(original.EmailAddress).email;
+        if (email !== original.EmailAddress) return fail('CONFIGURATION_INVALID');
         if (seenAddresses.has(email)) continue;
         seenAddresses.add(email);
+        const meta = metadata.get(addressHash(email, secret.key));
+        if (meta?.registration_state !== 'ACTIVE') { excludedNoRecord += 1; continue; }
+        const contact = applyContactMetadata(original, meta);
+        if (contact.UnsubscribeAll === true) continue;
+        if (contact.TopicPreferences?.some((preference) => preference.TopicName === campaign.topic && preference.SubscriptionStatus !== 'OPT_IN')) continue;
         if (runtime.env !== 'prod' && !health.config.nonprod_allowlist.includes(email)) { excluded += 1; continue; }
         recipients.push({ e: email });
         if (recipients.length > health.config.max_recipients_per_campaign) return fail('TOO_MANY_RECIPIENTS');
@@ -105,7 +105,7 @@ export async function prepare(event, runtime) {
       await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: `recipients/${id}/${String(chunk).padStart(5, '0')}.jsonl`, ContentType: 'application/x-ndjson', Body: shuffled.slice(chunk * health.config.batch_size, (chunk + 1) * health.config.batch_size).map((item) => JSON.stringify(item)).join('\n') + '\n' });
     }
     progress = { chunk: 0, index: 0 };
-    counts = { accepted: 0, failed: 0, unknown: 0, skipped_blocked: 0, excluded_allowlist: excluded };
+    counts = { accepted: 0, failed: 0, unknown: 0, skipped_blocked: 0, excluded_allowlist: excluded, excluded_no_record: excludedNoRecord };
   }
   if (!campaign.approval_scope) return fail('OUTSIDE_APPROVED_WINDOW');
   if (runtime.now() < Date.parse(campaign.approval_scope.send_after)) return fail('OUTSIDE_APPROVED_WINDOW');

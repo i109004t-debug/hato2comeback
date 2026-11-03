@@ -137,7 +137,7 @@ test('6.6 テスト送信も共有枠、許可先・購読・日次枠を検査'
   assert.equal((await s.send()).type, 'WAIT_DAY');
   f.contacts[1].UnsubscribeAll = true;
   assert.equal((await s.send(f.addresses[1])).code, 'TEST_RECIPIENT_NOT_REGISTERED');
-  assert.equal((await s.send('outsider@example.com')).code, 'RECIPIENT_NOT_ALLOWED_IN_ENV');
+  assert.equal((await s.send(f.addresses[6])).code, 'RECIPIENT_NOT_ALLOWED_IN_ENV');
 });
 
 test('6.6 本番テストは受入記録の未登録だけを許容し、失効済みを回避できない', async () => {

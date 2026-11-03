@@ -6,7 +6,7 @@ import { AppError, invalid } from '../../common/http.js';
 import { contactAttributes } from '../../common/contact-metadata.js';
 import { isErased, eraseMatch } from '../../common/erase.js';
 import { marshall, createExpressions, encodeCursor, decodeCursor } from '../../common/ddb.js';
-import { updateRecord, timestamp, objectText } from '../../common/records.js';
+import { updateRecord, timestamp, objectText, contactPages } from '../../common/records.js';
 import { jstDate } from '../../common/time.js';
 import { readRecoveryAudit, replayContactAudit, recoveryRedo } from '../../common/recovery-audit.js';
 import { isIsoDateTime } from '../../common/validate.js';
@@ -31,7 +31,7 @@ async function move(runtime, secret, contact, source) {
     if (erased || current) return false;
     if (contact.HT2MetadataStatus === 'MISSING' || !contact.AttributesData) throw missing();
     await updateRecord(runtime, 'CONTACT_META', SK, undefined, {
-      kid: secret.kid, attributes: contactAttributes(contact), blocked_all: contact.UnsubscribeAll === true,
+      kid: secret.kid, attributes: contactAttributes(contact), registration_state: 'ACTIVE', blocked_all: contact.UnsubscribeAll === true,
       blocked_topics: (contact.TopicPreferences ?? []).filter((entry) => entry.SubscriptionStatus === 'OPT_OUT').map((entry) => entry.TopicName).sort(),
     });
     return true;
@@ -95,8 +95,11 @@ async function replayBackup(runtime, secret, backup, until) {
   const audits = await readRecoveryAudit(runtime, backup.at, until);
   const identities = new Map();
   const macs = new Map();
+  const backupEmails = new Set();
+  let missingIdentity = false;
   for (const contact of backup.rows) {
     const email = normalizeEmail(contact.EmailAddress).email;
+    backupEmails.add(email);
     const id = addressHash(email, secret.key);
     identities.set(id, id);
     if (contact.HT2AddrId) {
@@ -104,25 +107,29 @@ async function replayBackup(runtime, secret, backup, until) {
       if (identities.has(contact.HT2AddrId) && identities.get(contact.HT2AddrId) !== id) throw missing();
       identities.set(contact.HT2AddrId, id);
     }
+    if (!contact.HT2AddrId && !secret.previous) missingIdentity = true;
     if (secret.previous) identities.set(addressHash(email, secret.previous.key), id);
     macs.set(await eraseMatch(runtime, email), id);
   }
-  let unidentified = false;
+  const unidentified = audits.filter((item) => item.action === 'CONTACT_STOP' && !identities.has(item.addr_id)).length;
+  // 旧形式では未対応の停止がバックアップ外の宛先か判断できないため、復旧を完了しない。
+  if (unidentified && missingIdentity) throw missing();
   const reapplied = await replayContactAudit(runtime, audits, { contactFields: { kid: secret.kid }, resolveAddrId(item) {
-    const id = identities.get(item.addr_id) ?? (item.action === 'ERASE' ? macs.get(item.details.erase_mac) : undefined);
-    if (!id && item.action === 'CONTACT_STOP') unidentified = true;
-    return id;
+    return identities.get(item.addr_id) ?? (item.action === 'ERASE' ? macs.get(item.details.erase_mac) : undefined);
   } });
-  // 古いバックアップに識別子がなく旧鍵も失った場合は、停止を取りこぼさない。
-  if (unidentified) for await (const page of runtime.store.queryPages({ KeyConditionExpression: 'PK = :pk', ExpressionAttributeValues: { ':pk': { S: 'CONTACT_META' } }, ConsistentRead: true })) {
-    for (const item of page.items) {
-      if (item.kid !== secret.kid || item.erased) continue;
-      const attributes = { ...(item.attributes ?? {}) };
-      delete attributes.name;
-      await updateRecord(runtime, 'CONTACT_META', item.SK, item, { blocked_all: true, attributes }, ['pending_attributes']);
+  const outsideBackup = new Set();
+  for await (const contacts of contactPages(runtime)) {
+    for (const contact of contacts) {
+      const email = normalizeEmail(contact.EmailAddress).email;
+      if (!backupEmails.has(email)) outsideBackup.add(email);
     }
   }
-  return { reapplied, redo: recoveryRedo(audits), warnings: unidentified ? ['UNIDENTIFIED_STOPS_ALL_BLOCKED'] : [] };
+  const message = '送信の対象外。再登録か再同意で戻す。';
+  const warnings = [
+    ...(unidentified ? [{ code: 'UNIDENTIFIED_STOPS', count: unidentified, message }] : []),
+    ...(outsideBackup.size ? [{ code: 'CONTACTS_NOT_IN_BACKUP', count: outsideBackup.size, message }] : []),
+  ];
+  return { reapplied, redo: recoveryRedo(audits), warnings };
 }
 
 async function recoveryReport(runtime, state) {

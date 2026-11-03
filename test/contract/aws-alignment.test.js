@@ -124,7 +124,7 @@ test('第8段階5 ロック取得と宛先の進捗で各連続回数を戻す',
   assert.equal(f.getCampaign().progress.index, 1);
 });
 test('第8段階5 準備中の待機停止はAPI再開後も準備から続ける', async () => {
-  const f = managementFixture({ count: 1 });
+  const f = managementFixture({ registered: true, count: 1 });
   f.setCampaign({ status: 'PAUSED', pause_phase: 'prepare', pause_reason: 'LOCK_WAIT_TIMEOUT', execution_arn: ARN, paused_at: new Date(f.deps.now()).toISOString(), wait_lock_run: 288 });
   f.files.set('delivery-checks/fix/evidence', '{}');
   const response = await f.request(`POST ${f.campaignPath}/resume`, { note: 'ロック確認済み', evidence_key: 'delivery-checks/fix/evidence' });

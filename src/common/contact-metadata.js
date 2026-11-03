@@ -28,16 +28,17 @@ export async function getContactMetadata(runtime, email) {
   return runtime.store.get('CONTACT_META', await contactMetadataKey(runtime, email));
 }
 
-export async function ensureContactMetadata(runtime, contact) {
+export async function ensureContactMetadata(runtime, contact, { newConsent = false, pending = false } = {}) {
   const { addr_id: hash, kid } = await contactIdentity(runtime, contact.EmailAddress);
   if (await isErased(runtime, contact.EmailAddress)) throw new AppError('ERASED_ADDRESS', 409, '完全削除された宛先です。');
   const current = await runtime.store.get('CONTACT_META', hash);
   if (current?.erased) throw new AppError('ERASED_ADDRESS', 409, '完全削除された宛先です。');
   if (current) return current;
   if ((await runtime.store.get('LOCK', 'CONTACT_CREATE'))?.owner?.startsWith('rekey:')) throw new AppError('CONTACT_IMPORT_IN_PROGRESS', 409, '鍵の入れ替えを処理中です。');
+  if (!newConsent && (await runtime.store.get('SETTINGS', 'REKEY'))?.source === 'BACKUP') throw new AppError('RECONSENT_REQUIRED', 409, '復旧後に記録のない宛先は、新しい同意を確認して再同意を登録してください。');
   const attributes = contactAttributes(contact);
   try {
-    return await updateRecord(runtime, 'CONTACT_META', hash, undefined, { kid, attributes, blocked_all: false, blocked_topics: [] });
+    return await updateRecord(runtime, 'CONTACT_META', hash, undefined, { kid, attributes, registration_state: pending ? 'PENDING' : 'ACTIVE', blocked_all: pending, blocked_topics: [] });
   } catch (error) {
     if (!conflict(error)) throw error;
     const latest = await runtime.store.get('CONTACT_META', hash);
@@ -58,12 +59,12 @@ export function applyContactMetadata(contact, metadata) {
   };
 }
 
-// SESの購読停止に加えて、アプリ側の停止と完全削除を送信直前に確認する。
+// 同意の正本、アプリ側の停止と完全削除を送信直前に確認する。
 export async function contactBlocked(runtime, email, topic) {
   const hash = await contactMetadataKey(runtime, email);
   if (await isErased(runtime, email)) return true;
   const metadata = await runtime.store.get('CONTACT_META', hash);
-  return metadata?.erased === true || metadata?.blocked_all === true || metadata?.blocked_topics?.includes(topic) === true;
+  return metadata?.registration_state !== 'ACTIVE' || metadata.erased === true || metadata.blocked_all === true || metadata.blocked_topics?.includes(topic) === true;
 }
 
 export async function eraseContactMetadata(runtime, email) {

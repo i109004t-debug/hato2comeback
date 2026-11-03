@@ -9,7 +9,7 @@ const block = (f, email) => f.ddb.set({ PK: 'CONTACT_META', SK: hash(email), ver
 
 for (const operation of ['topic', 'all', 'erase']) {
   test(`7.4・8.2 snapshot後の${operation}停止はSKIPPEDとして保存・表示し、失敗に含めない`, async () => {
-    const f = managementFixture({ count: 1 }); await f.prepare();
+    const f = managementFixture({ registered: true, count: 1 }); await f.prepare();
     const response = await f.request(`POST /contacts/${operation === 'erase' ? 'erase' : 'unsubscribe'}`, { email: f.addresses[0], ...(operation === 'erase' ? { note: '本人から削除依頼' } : { scope: operation === 'all' ? 'ALL' : 'news' }) });
     assert.equal(response.statusCode, 200, response.body);
     await f.send();
@@ -34,7 +34,7 @@ for (const operation of ['topic', 'all', 'erase']) {
 }
 
 test('7.4.1 日次枠予約後に停止が確定しても送信せず、枠を戻さずSKIPPEDへ計上する', async () => {
-  const f = managementFixture({ count: 1 }); await f.prepare();
+  const f = managementFixture({ registered: true, count: 1 }); await f.prepare();
   f.ddb.afterUpdate = async (input) => { if (input.Key.PK.S === 'DAILY') block(f, f.addresses[0]); };
   await f.send();
   assert.equal(f.ddb.get('DAILY', '2026-11-03').reserved_attempts, 1);
@@ -45,7 +45,7 @@ test('7.4.1 日次枠予約後に停止が確定しても送信せず、枠を�
 });
 
 test('7.4 20件を超える停止のcheckpointでも件数を重複加算せず、旧countsにも項目を追加する', async () => {
-  const f = managementFixture({ count: 25 }); await f.prepare();
+  const f = managementFixture({ registered: true, count: 25 }); await f.prepare();
   const counts = f.getCampaign().counts;
   delete counts.skipped_blocked;
   f.setCampaign({ counts });
@@ -60,7 +60,7 @@ test('7.4 20件を超える停止のcheckpointでも件数を重複加算せず�
 });
 
 test('8.1 停止と実際のSES送信失敗を別々に集計する', async () => {
-  const f = managementFixture({ count: 2 }); await f.prepare();
+  const f = managementFixture({ registered: true, count: 2 }); await f.prepare();
   block(f, f.addresses[0]);
   f.onSend = () => { throw failure('BadRequestException', 400, 'Invalid email address'); };
   await f.send();
@@ -72,7 +72,7 @@ test('8.1 停止と実際のSES送信失敗を別々に集計する', async () =
 });
 
 test('6.6 テスト送信も予約後の停止はSKIPPEDとし、残りの登録済み宛先へ進む', async () => {
-  const f = managementFixture({ count: 2 }); f.draft();
+  const f = managementFixture({ registered: true, count: 2 }); f.draft();
   let blocked = false;
   f.ddb.afterUpdate = async (input) => {
     if (input.Key.PK.S !== 'DAILY' || blocked) return;

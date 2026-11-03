@@ -3,7 +3,7 @@ import { createHandler } from '../../src/api/handler.js';
 import { createHandler as createWorker } from '../../src/worker/handler.js';
 
 export function managementFixture(options = {}) {
-  const f = fixture(options);
+  const f = fixture({ registered: false, ...options });
   f.role = options.role ?? 'admin';
   f.enabled = true;
   f.sub = 'user';

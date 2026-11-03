@@ -154,7 +154,7 @@ for (const mode of ['prepare', 'send', 'finish', 'import']) test(`T-69 worker/${
 });
 
 test('T-61 結果ファイルとAPI-24は同じaddr_id・伏せ字・位置だけを返し、メールタグridも一致する', async () => {
-  const f = managementFixture({ count: 1 }); await f.prepare();
+  const f = managementFixture({ registered: true, count: 1 }); await f.prepare();
   f.onSend = () => { throw Object.assign(new Error('timeout'), { name: 'TimeoutError' }); };
   await f.send();
   const raw = [...f.files.entries()].find(([path]) => path.startsWith('results/'))[1]; const result = JSON.parse(raw.trim());

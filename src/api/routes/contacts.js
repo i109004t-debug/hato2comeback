@@ -55,7 +55,12 @@ async function list({ runtime, user, query, topics }) {
 
 async function get({ runtime, user, body }) {
   const loaded = await load(runtime, body.email);
-  const contact = applyContactMetadata(loaded, await ensureContactMetadata(runtime, { ...loaded, EmailAddress: body.email }));
+  let metadata;
+  try { metadata = await ensureContactMetadata(runtime, { ...loaded, EmailAddress: body.email }); } catch (error) {
+    if (error.code !== 'RECONSENT_REQUIRED') throw error;
+    metadata = { blocked_all: true };
+  }
+  const contact = applyContactMetadata(loaded, metadata);
   let suppression = null;
   try {
     const result = await runtime.ses.getSuppressedDestination({ EmailAddress: body.email });
@@ -111,7 +116,8 @@ async function create({ runtime, user, body, audit, requestId }) {
 async function change(ctx) {
   const { runtime, body, user, route, audit, topics } = ctx;
   const loaded = await load(runtime, body.email);
-  let metadata = await ensureContactMetadata(runtime, { ...loaded, EmailAddress: body.email });
+  const reconsenting = route.operation === 'contacts.reconsent';
+  let metadata = await ensureContactMetadata(runtime, { ...loaded, EmailAddress: body.email }, { newConsent: reconsenting, pending: reconsenting });
   const contact = applyContactMetadata(loaded, metadata);
   // 結果不明の登録を再同意で復旧する場合は、SES実在データと今回の新しい同意だけを採用する。
   const attrs = metadata.registration_state === 'PENDING' && route.operation === 'contacts.reconsent' ? attributes(loaded) : structuredClone(metadata.attributes);

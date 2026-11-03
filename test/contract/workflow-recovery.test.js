@@ -13,7 +13,7 @@ const arn = (name) => `arn:aws:states:ap-northeast-1:123456789012:execution:ht2:
 const completed = (status = 'SUCCEEDED', action = 'START_FAILED') => ({ status, input: JSON.stringify({ campaign_id: ID }), output: JSON.stringify({ campaign_id: ID, result: { action } }) });
 
 function recoveryFixture(options = {}) {
-  const f = managementFixture({ env: 'prod', count: 2, ...options });
+  const f = managementFixture({ registered: true, env: 'prod', count: 2, ...options });
   f.draft();
   f.ddb.set({ PK: 'ACCEPTANCE', SK: ID, check_id: ID, schema_version: 1, status: 'OPEN', version: 0, expires_at: Math.floor(f.deps.now() / 1000) + 86400, test_sends: [], cases: {} });
   f.org.delivery_check = { ...f.delivery, status: 'FAIL' };
@@ -105,7 +105,7 @@ test('6.6 復旧テスト途中の安全条件悪化と結果不明の再送を�
 });
 
 async function failStart(mode = 'NOW') {
-  const f = managementFixture({ count: 1 });
+  const f = managementFixture({ registered: true, count: 1 });
   f.setCampaign({ status: 'APPROVED' });
   const request = { mode, ...(mode === 'SCHEDULED' ? { at: '2026-11-04T19:05:00+09:00' } : {}) };
   const response = await f.request(`POST ${f.campaignPath}/start`, request);

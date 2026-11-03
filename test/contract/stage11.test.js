@@ -263,7 +263,7 @@ test('API-28 証跡は復号後1MiBまで、壊れたBase64・空・期限切れ
 });
 
 test('6.6 受入復旧のテスト送信は検査ID必須で、伏せ字の結果を検査に保存する', async () => {
-  const f = managementFixture({ env: 'prod', count: 1 }); f.draft();
+  const f = managementFixture({ registered: true, env: 'prod', count: 1 }); f.draft();
   code(await f.request(`POST ${f.campaignPath}/test-send`, { purpose: 'ACCEPTANCE_RECOVERY', note: '確認' }), 400, 'INVALID_REQUEST');
   const check = await startCheck(f);
   const response = await f.request(`POST ${f.campaignPath}/test-send`, { purpose: 'ACCEPTANCE_RECOVERY', note: '受信を確認', check_id: check.check_id });

@@ -241,7 +241,7 @@ test('旧SESの1024バイトを超える属性は切り捨てず移行未完了�
 });
 
 test('snapshot後のローカル停止を送信直前に確認し、SESを呼び出さない', async () => {
-  const f = managementFixture({ count: 1 });
+  const f = managementFixture({ registered: true, count: 1 });
   await f.prepare();
   assert.equal((await f.request('POST /contacts/unsubscribe', { email: f.addresses[0], scope: 'news' })).statusCode, 200);
   await f.send();
@@ -251,7 +251,7 @@ test('snapshot後のローカル停止を送信直前に確認し、SESを呼び
 });
 
 test('送信間隔の待機中に受け付けたローカル停止もAPI開始前に再確認する', async () => {
-  const f = managementFixture({ count: 2 });
+  const f = managementFixture({ registered: true, count: 2 });
   await f.prepare();
   let stopped = false;
   f.onSleep = async () => {

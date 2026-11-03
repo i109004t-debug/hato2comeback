@@ -70,14 +70,20 @@ test('第13段階 rekey BACKUPは旧鍵なしでAPI-07・08・一括停止とERA
   assert.equal(f.ddb.calls.length, writes);
 });
 
-for (const previous of [false, true]) test(`第13段階 古いバックアップの停止は旧鍵${previous ? 'ありで照合' : 'なしなら全停止'}する`, async () => {
+for (const previous of [false, true]) test(`第14段階 古いバックアップの停止は旧鍵${previous ? 'ありで照合' : 'なしなら復旧未完了に'}する`, async () => {
   const f = rekeyFixture({ identified: false, previous, count: 2 });
   archive(f, 'CONTACT_STOP', oldId(f.addresses[0]), { scope: 'news', operation: 'IMPORT' });
   const result = await f.rekey();
-  assert.equal(result.status, 'DONE');
-  assert.deepEqual(result.warnings, previous ? [] : ['UNIDENTIFIED_STOPS_ALL_BLOCKED']);
-  assert.equal(f.ddb.get('CONTACT_META', newId(f.addresses[1])).blocked_all, !previous);
-  if (!previous) assert.equal(f.ddb.get('CONTACT_META', newId(f.addresses[1])).attributes.name, undefined);
+  assert.equal(result.status, previous ? 'DONE' : 'FAILED');
+  assert.equal(f.ddb.get('CONTACT_META', newId(f.addresses[1])).blocked_all, false);
+  assert.equal(f.ddb.get('CONTACT_META', newId(f.addresses[1])).attributes.name, 'バックアップの名前');
+  if (previous) assert.deepEqual(result.warnings, []);
+  else {
+    assert.equal(result.code, 'BACKUP_ATTRIBUTES_MISSING');
+    assert.ok(f.ddb.get('CONTACT_META', oldId(f.addresses[1])));
+    assert.equal(f.ddb.get('LOCK', 'CONTACT_CREATE').owner, 'rekey:k2');
+    assert.equal(f.ddb.get('SETTINGS', 'REKEY').complete, false);
+  }
 });
 
 test('第13段階 旧IDを対応付けられないERASEもKMS照合で復旧し、SESと属性を消す', async () => {
