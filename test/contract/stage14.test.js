@@ -195,7 +195,8 @@ test('第14段階 BACKUP復旧後の記録なしは日次・詳細表示・名�
   assert.equal(f.ddb.get('SETTINGS', 'CONTACT_BACKUP').attributes_missing, 1);
   const detail = await f.request('POST /contacts/get', { email: f.addresses[0] });
   assert.equal(detail.statusCode, 200, detail.body);
-  assert.equal(detail.json.UnsubscribeAll, true);
+  assert.equal(detail.json.sendable, false);
+  assert.deepEqual(detail.json.sendability.news.reasons, ['NO_CONSENT_RECORD']);
   assert.equal(meta(f), undefined);
   const update = await f.request('POST /contacts/update', { email: f.addresses[0], name: '変更だけ' });
   assert.equal(update.json.error_code, 'RECONSENT_REQUIRED');

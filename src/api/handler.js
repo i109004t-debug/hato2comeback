@@ -28,7 +28,7 @@ import readiness from './routes/readiness.js';
 import deliveryCheck from './routes/delivery-check.js';
 
 const routes = { ...me, ...settings, ...topics, ...contacts, ...imports, ...campaigns, ...auditRoutes, ...staff, ...readiness, ...deliveryCheck };
-const topicOperations = new Set(['contacts.list', 'contacts.create', 'contacts.update', 'contacts.unsubscribe', 'contacts.reconsent', 'campaigns.create', 'campaigns.update']);
+const topicOperations = new Set(['contacts.list', 'contacts.get', 'contacts.events', 'contacts.create', 'contacts.update', 'contacts.unsubscribe', 'contacts.reconsent', 'campaigns.create', 'campaigns.update']);
 
 export function createHandler(deps = {}) {
   const environment = deps.environment ?? process.env;

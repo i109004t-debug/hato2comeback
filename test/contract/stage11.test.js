@@ -343,8 +343,7 @@ test('API-35 取りやめ・24時間経過は登録せずファイルを削除�
 });
 
 test('T-67 一括更新はCONTACT_METAだけを更新し、停止を戻さず未登録を作らず行ごとに停止を監査する', async () => {
-  const f = managementFixture({ env: 'prod', count: 3 });
-  for (const email of f.addresses) await f.request('POST /contacts/get', { email });
+  const f = managementFixture({ env: 'prod', count: 3, registered: true });
   const hash = rid(f);
   f.ddb.set({ ...f.ddb.get('CONTACT_META', hash), blocked_all: true });
   const csv = `email,name,stop\n${f.addresses[0]},変更,\n${f.addresses[1]},,ALL\n${f.addresses[2]},,news|event\nmissing@example.com,未登録,ALL\n`;
@@ -367,8 +366,7 @@ test('T-67 一括更新はCONTACT_METAだけを更新し、停止を戻さず未
 });
 
 test('T-67 一括更新は未登録・変更なし・完全削除・不正行を区別し、確認後の同時停止を上書きしない', async () => {
-  const f = managementFixture({ env: 'prod', count: 2 });
-  for (const email of f.addresses) await f.request('POST /contacts/get', { email });
+  const f = managementFixture({ env: 'prod', count: 2, registered: true });
   const csv = `email,name,stop\n${f.addresses[0]},更新,news\n${f.addresses[1]},,\nmissing@example.com,,\nwrong,,ALL\n`;
   const id = await previewImport(f, csv, 'UPDATE_EXISTING');
   assert.deepEqual(f.ddb.get('IMPORT', id).summary, { UPDATED: 1, UNCHANGED: 1, NOT_FOUND: 1, INVALID: 1 });

@@ -2,7 +2,7 @@ import { shuffleRecipients } from '../../common/shuffle.js';
 import { normalizeEmail } from '../../common/email.js';
 import { change, output, currentAction, readChunk, boundedWait, workflowStep } from '../state.js';
 import { addressHash } from '../../common/log.js';
-import { applyContactMetadata } from '../../common/contact-metadata.js';
+import { contactSendability, hasConsentRecord } from '../../common/contact-metadata.js';
 
 import { reviewUnsupportedSchema } from '../../common/schema.js';
 import { completionForecast, campaignDeadline } from '../../common/forecast.js';
@@ -81,10 +81,8 @@ export async function prepare(event, runtime) {
         if (seenAddresses.has(email)) continue;
         seenAddresses.add(email);
         const meta = metadata.get(addressHash(email, secret.key));
-        if (meta?.registration_state !== 'ACTIVE') { excludedNoRecord += 1; continue; }
-        const contact = applyContactMetadata(original, meta);
-        if (contact.UnsubscribeAll === true) continue;
-        if (contact.TopicPreferences?.some((preference) => preference.TopicName === campaign.topic && preference.SubscriptionStatus !== 'OPT_IN')) continue;
+        if (!hasConsentRecord(meta)) { excludedNoRecord += 1; continue; }
+        if (!contactSendability(meta, campaign.topic, { contact: original, defaultStatus: 'OPT_IN' }).sendable) continue;
         if (runtime.env !== 'prod' && !health.config.nonprod_allowlist.includes(email)) { excluded += 1; continue; }
         recipients.push({ e: email });
         if (recipients.length > health.config.max_recipients_per_campaign) return fail('TOO_MANY_RECIPIENTS');

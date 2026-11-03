@@ -4,7 +4,7 @@ import { requiresEmailMask } from '../../common/authz.js';
 import { decodeSesCursor, encodeSesCursor } from '../../common/ddb.js';
 import { addressHash } from '../../common/log.js';
 import { timestamp, updateRecord } from '../../common/records.js';
-import { contactAttributes, getContactMetadata, ensureContactMetadata, applyContactMetadata, eraseContactMetadata } from '../../common/contact-metadata.js';
+import { contactAttributes, getContactMetadata, ensureContactMetadata, applyContactMetadata, eraseContactMetadata, contactDeliveryStatus, batchContactMetadata } from '../../common/contact-metadata.js';
 import { isErased, eraseMatch } from '../../common/erase.js';
 import { deleteDeliveryIndex } from '../../common/storage.js';
 import { deliveryEvents } from '../../common/delivery-events.js';
@@ -35,39 +35,37 @@ async function load(runtime, email) {
   }
 }
 
-async function list({ runtime, user, query, topics }) {
+async function list({ runtime, user, query, topics, topicDefinitions }) {
   if (query.topic && !topics.includes(query.topic)) throw invalid('topic', 'UNKNOWN_TOPIC');
   const token = decodeSesCursor(query.cursor);
   // ローカル停止はSESのOPT_OUT検索には現れないため、停止検索ではSES側の絞込みをしない。
   const filter = { ...(query.status === 'OPT_IN' ? { FilteredStatus: query.status } : {}), ...(query.topic ? { TopicFilter: { TopicName: query.topic, UseDefaultIfPreferenceUnavailable: true } } : {}) };
   const page = await runtime.ses.listContacts({ ContactListName: runtime.contactList, PageSize: query.limit, ...(Object.keys(filter).length ? { Filter: filter } : {}), ...(token ? { NextToken: token } : {}) });
   const items = [];
+  const records = await batchContactMetadata(runtime, page.Contacts ?? []);
   for (const item of page.Contacts ?? []) {
-    const metadata = await getContactMetadata(runtime, item.EmailAddress);
+    const metadata = records.get(await contactMetadataKey(runtime, item.EmailAddress));
     if (metadata?.erased) continue;
     const effective = applyContactMetadata(item, metadata);
-    const status = effective.UnsubscribeAll ? 'OPT_OUT' : query.topic ? effective.TopicPreferences?.find((entry) => entry.TopicName === query.topic)?.SubscriptionStatus ?? 'OPT_OUT' : 'OPT_IN';
+    const status = effective.UnsubscribeAll ? 'OPT_OUT' : query.topic ? effective.TopicPreferences?.find((entry) => entry.TopicName === query.topic)?.SubscriptionStatus ?? topicDefinitions.find((topic) => topic.TopicName === query.topic)?.DefaultSubscriptionStatus ?? 'OPT_OUT' : 'OPT_IN';
     if (query.status && status && status !== query.status) continue;
-    items.push(visible(effective, user));
+    items.push({ ...visible(effective, user), ...contactDeliveryStatus(item, metadata, topicDefinitions) });
   }
   return { items, cursor: encodeSesCursor(page.NextToken) };
 }
 
-async function get({ runtime, user, body }) {
+async function get({ runtime, user, body, topicDefinitions }) {
   const loaded = await load(runtime, body.email);
-  let metadata;
-  try { metadata = await ensureContactMetadata(runtime, { ...loaded, EmailAddress: body.email }); } catch (error) {
-    if (error.code !== 'RECONSENT_REQUIRED') throw error;
-    metadata = { blocked_all: true };
-  }
-  const contact = applyContactMetadata(loaded, metadata);
+  const metadata = await getContactMetadata(runtime, body.email);
+  const erased = await isErased(runtime, body.email);
+  const contact = applyContactMetadata(loaded, erased ? { ...metadata, erased: true } : metadata ?? { attributes: {} });
   let suppression = null;
   try {
     const result = await runtime.ses.getSuppressedDestination({ EmailAddress: body.email });
     const item = result.SuppressedDestination;
     if (item) suppression = { reason: item.Reason, last_update_time: item.LastUpdateTime };
   } catch (error) { if (error.name !== 'NotFoundException') throw error; }
-  return { ...visible(contact, user), suppression };
+  return { ...visible(contact, user), ...contactDeliveryStatus(loaded, metadata, topicDefinitions, { erased }), suppression };
 }
 
 async function events(ctx) {

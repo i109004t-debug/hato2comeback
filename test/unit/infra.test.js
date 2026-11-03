@@ -258,7 +258,7 @@ function allowed(policy) {
 const apiOperations = {
   kms: 'GenerateMac',
   ses: 'GetAccount GetEmailIdentity GetConfigurationSet GetConfigurationSetEventDestinations GetContactList ListContacts GetContact CreateContact UpdateContact DeleteContact GetSuppressedDestination GetImportJob CreateEmailTemplate GetEmailTemplate TestRenderEmailTemplate SendEmail',
-  ddb: 'GetItem PutItem UpdateItem DeleteItem Query TransactWriteItems', s3: 'PutObject GetObject HeadObject DeleteObject ListObjectsV2', sns: 'Publish',
+  ddb: 'GetItem PutItem UpdateItem DeleteItem Query TransactWriteItems BatchGetItem', s3: 'PutObject GetObject HeadObject DeleteObject ListObjectsV2', sns: 'Publish',
   sfn: 'StartExecution DescribeExecution SendTaskSuccess SendTaskFailure', scheduler: 'CreateSchedule DeleteSchedule GetSchedule',
   cognito: 'AdminGetUser AdminListGroupsForUser ListUsersInGroup AdminCreateUser AdminAddUserToGroup AdminRemoveUserFromGroup AdminDisableUser AdminEnableUser AdminUserGlobalSignOut AdminSetUserMFAPreference AdminResetUserPassword', cloudwatch: 'GetMetricData DescribeAlarms', ssm: 'GetParameter', secrets: 'GetSecretValue', lambda: 'Invoke',
 };

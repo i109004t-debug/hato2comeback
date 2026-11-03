@@ -221,11 +221,10 @@ for (const action of ['CONTACT_STOP', 'ERASE']) test(`第13段階 ${action}の�
 });
 
 test('第13段階 API-07・08・10と一括停止が復元に必要な監査を必ず残す', async () => {
-  const f = managementFixture({ env: 'prod', count: 4 });
+  const f = managementFixture({ env: 'prod', count: 4, registered: true });
   assert.equal((await f.request('POST /contacts/update', { email: f.addresses[0], topics: { news: 'OPT_OUT' } })).statusCode, 200);
   assert.equal((await f.request('POST /contacts/unsubscribe', { email: f.addresses[1], scope: 'ALL' })).statusCode, 200);
   assert.equal((await f.request('POST /contacts/erase', { email: f.addresses[2], note: '本人依頼' })).statusCode, 200);
-  await f.request('POST /contacts/get', { email: f.addresses[3] });
   const received = await f.receive(`email,name,stop\n${f.addresses[3]},,news\n`, 'stage13', 'UPDATE_EXISTING');
   const id = received.json.import_id;
   assert.equal((await f.worker({ mode: 'import', import_id: id })).status, 'PREVIEW');

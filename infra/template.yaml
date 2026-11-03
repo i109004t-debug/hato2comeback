@@ -973,7 +973,7 @@ Resources:
             Resource: [!Ref OriginSecret, !Ref AddressHmacSecret]
           - Effect: Allow
             # TransactWriteItemsは内包するPutのdynamodb:PutItemで認可される。
-            Action: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:Query']
+            Action: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:Query', 'dynamodb:BatchGetItem']
             Resource: !GetAtt Table.Arn
           - Effect: Allow
             Action: ['ses:GetAccount', 'ses:GetSuppressedDestination', 'ses:GetImportJob']

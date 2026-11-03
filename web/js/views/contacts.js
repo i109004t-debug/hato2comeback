@@ -38,6 +38,31 @@ export function topicSummary(contact, topics) {
   }).join('、');
 }
 
+const SENDABILITY_REASONS = Object.freeze({
+  NO_CONSENT_RECORD: '同意の記録がありません。管理者が新しい同意を確かめて再同意を登録してください。',
+  REGISTRATION_PENDING: '登録の完了を確認できていません。管理者が処理結果と新しい同意を確かめて再同意を登録してください。',
+  REGISTRATION_CONFLICT: '登録時に既存の宛先と重複しました。管理者が登録内容と新しい同意を確かめて再同意を登録してください。',
+  ERASED: '完全削除済みです。この宛先は再登録・購読再開できません。',
+  BLOCKED_ALL: '運営者がすべての配信を停止しています。',
+  BLOCKED_TOPIC: '運営者がこの配信リストを停止しています。',
+  SES_UNSUBSCRIBED_ALL: 'メール配信サービス側ですべての配信が停止されています。',
+  SES_UNSUBSCRIBED_TOPIC: 'メール配信サービス側でこの配信リストを購読していません。',
+});
+
+export const sendabilityReason = (reason) => SENDABILITY_REASONS[reason] ?? '送信できることを確認できません。管理者に確認してください。';
+const shortReasons = Object.freeze({ NO_CONSENT_RECORD: '同意の記録なし', REGISTRATION_PENDING: '登録の完了が未確認', REGISTRATION_CONFLICT: '登録の重複', ERASED: '完全削除済み', BLOCKED_ALL: '運営者による全停止', BLOCKED_TOPIC: '運営者によるリスト停止', SES_UNSUBSCRIBED_ALL: 'サービス側の全停止', SES_UNSUBSCRIBED_TOPIC: 'サービス側で未購読' });
+const displayReasons = (state) => state.reasons?.includes('ERASED') ? ['ERASED'] : state.reasons?.length ? state.reasons : ['UNKNOWN'];
+
+export function sendabilitySummary(contact, topics, { detail = false } = {}) {
+  const states = topics.map((topic) => ({ topic, state: contact.sendability?.[topic.TopicName] }));
+  if (!states.length || states.some(({ state }) => typeof state?.sendable !== 'boolean')) return '送信対象か確認できません。読み込み直してください。';
+  const blocked = states.filter(({ state }) => !state.sendable);
+  if (!blocked.length) return '送信対象です（宛先の登録・購読状態による判定）。';
+  const prefix = blocked.length === states.length ? 'この宛先には送られません' : '一部の配信リストには送られません';
+  if (detail) return `${prefix}。\n${states.map(({ topic, state }) => `${topic.DisplayName}：${state.sendable ? '送信対象です。' : `送られません：${displayReasons(state).map(sendabilityReason).join('')}`}`).join('\n')}`;
+  return `${prefix}（${blocked.map(({ topic, state }) => `${topic.DisplayName}：${displayReasons(state).map((reason) => shortReasons[reason] ?? '要確認').join('・')}`).join('／')}）`;
+}
+
 export const IMPORT_STATUSES = Object.freeze({ RECEIVED: '受付済み', VALIDATING: '検証中', PREVIEW: '確認待ち（24時間以内に反映してください）', APPLYING: '更新を反映中', DISCARDED: '取りやめ', EXPIRED: '確認の期限切れ', SUBMITTING: '登録の受付を確認中', IMPORTING: '取込中', DONE: '完了', FAILED: '失敗', NEEDS_REVIEW: '要確認（管理者が確認してください）' });
 const ROW_REASONS = Object.freeze({ DUPLICATE_IN_FILE: 'ファイル内の重複', EXISTING_SKIPPED: '登録済みのため変更しません', ERASED_SKIPPED: '完全削除済みのため登録しません', NOT_ALLOWED_IN_ENV: 'この環境で許可されていない宛先', INVALID_ADDRESS: 'メールアドレスの形式が不正', NONSTANDARD_ADDRESS: '登録できない形式のメールアドレス', INVALID_REQUEST: '入力の形式が不正', ATTRIBUTES_TOO_LARGE: '同意などの情報が大きすぎます' });
 export const importReason = (code) => ({ UPDATED: '名前か停止を更新', UNCHANGED: '変更なし', NOT_FOUND: '登録されていないため変更しません', ERASED: '完全削除済み', INVALID: '形式または確認後の状態変更のため反映しません', READY: '新規登録の対象', PREVIEW_CHANGED: '確認後に状態が変わったため反映しません' }[code] ?? ROW_REASONS[code] ?? '行の形式・同意の記録・配信リストを確認してください。');
@@ -100,6 +125,7 @@ export async function mount(ctx) {
     if (!isMasked(ctx.user)) { try { attrs = JSON.parse(contact.AttributesData ?? '{}'); } catch { /* 不正な属性は画面へ反射しない。 */ } }
     setText(root, '[data-detail-name]', attrs?.name ? `名前：${attrs.name}` : '');
     setText(root, '[data-detail-topics]', `${contact.UnsubscribeAll ? '全停止中。' : ''}${topicSummary(contact, ctx.topics.items)}`);
+    setText(root, '[data-detail-sendability]', sendabilitySummary(contact, ctx.topics.items, { detail: true }));
     setText(root, '[data-detail-consent]', attrs?.consent ? `同意の日時：${formatTime(attrs.consent.at)}／取得経路：${attrs.consent.source ?? '—'}／版：${attrs.consent.version || '指定なし'}${attrs.reconsent ? `／新しい同意：${formatTime(attrs.reconsent.at)} ${attrs.reconsent.source ?? ''}` : ''}` : '');
     setText(root, '[data-suppression]', contact.suppression ? `配送しない宛先（抑止）：${contact.suppression.reason === 'BOUNCE' ? 'バウンス' : contact.suppression.reason === 'COMPLAINT' ? '苦情' : '要確認'}／${formatTime(contact.suppression.last_update_time)}` : '配送しない宛先（抑止）には登録されていません。');
     if (writable()) {
@@ -121,7 +147,8 @@ export async function mount(ctx) {
       button.setAttribute('data-search-only', '');
       if (isMasked(ctx.user)) button.title = '完全一致検索で詳細を確認してください。';
       button.addEventListener('click', () => { if (!isMasked(ctx.user)) perform(() => detail(contact.EmailAddress)); });
-      return [visibleAddress(contact.EmailAddress, ctx.user), contact.UnsubscribeAll ? '全停止' : '—', topicSummary(contact, ctx.topics.items), button];
+      const delivery = element('p', sendabilitySummary(contact, ctx.topics.items), contact.sendable === false || Object.values(contact.sendability ?? {}).some((state) => !state.sendable) ? 'notice' : 'hint');
+      return [visibleAddress(contact.EmailAddress, ctx.user), contact.UnsubscribeAll ? '全停止' : '—', topicSummary(contact, ctx.topics.items), delivery, button];
     }));
   }
 

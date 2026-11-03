@@ -125,6 +125,7 @@ export function progressLines(campaign, stats = {}) {
     ['送信済み（SES受付・送信処理の集計）／総数', `${formatCount(counts.accepted)} ／ ${formatCount(campaign.recipients_total)}`],
     ['失敗', formatCount(counts.failed)], ['不明', formatCount(counts.unknown)],
     ['停止済みのため送らなかった', formatCount(counts.skipped_blocked)],
+    ['同意の記録がないため送らなかった', formatCount(counts.excluded_no_record)],
     ['許可リストによる除外', formatCount(counts.excluded_allowlist)],
     ['SES受付（イベントの集計）', formatCount(metrics.Send)],
     ...[['配送', 'Delivery'], ['配送遅延', 'DeliveryDelay'], ['バウンス', 'Bounce'], ['苦情', 'Complaint'], ['購読設定の変更', 'Subscription'], ['SES内部の拒否', 'Reject'], ['テンプレートの失敗', 'RenderingFailure']].map(([label, key]) => [label, formatCount(metrics[key])]),
