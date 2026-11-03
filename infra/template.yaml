@@ -1319,6 +1319,8 @@ Outputs:
     Value: !Sub 'https://${AppDomain}/'
   ApiBaseUrl:
     Value: '/api/v1'
+  SenderDomainName:
+    Value: !Ref SenderDomain
   ApiEndpoint:
     Value: !GetAtt HttpApi.ApiEndpoint
   WorkerFunctionName:

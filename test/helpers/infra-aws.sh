@@ -25,6 +25,7 @@ aws() {
         *"OutputKey=='RedirectUri'"*) printf 'https://app.dev.example.jp/callback.html\n' ;;
         *"OutputKey=='LogoutUri'"*) printf 'https://app.dev.example.jp/\n' ;;
         *"OutputKey=='ApiBaseUrl'"*) printf '/api/v1\n' ;;
+        *"OutputKey=='SenderDomainName'"*) printf 'fc.dev.example.jp\n' ;;
         *"OutputKey=='DataBucketName'"*) printf 'example-data\n' ;;
         *"OutputKey=='ContactListName'"*) printf 'postline\n' ;;
         *) printf 'unexpected mock query: %s\n' "$args" >&2; return 99 ;;

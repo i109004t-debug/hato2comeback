@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Postline｜運営画面</title>
+  <link rel="stylesheet" href="./app.css">
+  <script type="module" src="./js/app.js"></script>
+</head>
+<body data-page="app">
+  <a class="skip" href="#main">本文へ</a>
+  <header class="topbar">
+    <a class="brand" href="#/send">Postline<span>ポストライン</span></a>
+    <div><p id="organization"></p><p id="identity" class="muted"></p></div>
+    <button id="logout" type="button" hidden>ログアウト</button>
+  </header>
+  <nav id="navigation" aria-label="運営画面" hidden>
+    <a href="#/send">配信</a><a href="#/contacts">宛先</a><a href="#/history">配信履歴</a><a href="#/settings">設定</a>
+  </nav>
+  <main id="main" tabindex="-1" aria-busy="true"><p>運営画面を読み込んでいます。</p></main>
+  <footer class="site-footer">Postline · 配信に同意した会員へ、会報やお知らせを届けます。</footer>
+
+  <template id="login-template">
+    <section class="login panel"><p class="eyebrow">POSTLINE</p><h1>運営画面にログイン</h1><p>管理者から発行されたアカウントと、認証アプリのコードをご用意ください。</p><p data-message role="status"></p><button data-login type="button" class="primary">ログイン</button></section>
+  </template>
+
+  <template id="send-template">
+    <section>
+      <div class="page-heading"><div><p class="eyebrow">配信の作成と確認</p><h1>配信</h1></div><a href="#/send">新しい配信を作成</a></div>
+      <p data-message role="status" class="message"></p>
+      <div class="statusbar"><strong data-status></strong><span data-id class="muted"></span><button data-reload type="button">読み込み直す</button></div>
+      <p data-state-note class="notice"></p>
+      <div class="send-grid">
+        <div class="panel">
+          <dl class="sender"><dt>差出人</dt><dd data-from></dd><dt>返信先</dt><dd data-reply></dd></dl>
+          <form data-draft>
+            <label>配信リスト<select name="topic" required></select></label>
+            <p data-subscribers class="hint"></p>
+            <label>件名<input name="subject" required autocomplete="off"></label>
+            <label>本文<textarea name="body_text" rows="14" aria-describedby="body-help"></textarea></label>
+            <p id="body-help" class="hint">テキストのみ・50KiB以下。件名は200文字以内。件名・本文には {{ と }} を使えません。</p>
+            <p data-short-url class="notice" hidden>短縮URLらしいリンクがあります。迷惑メールと判定されやすくなるため、使わないでください。</p>
+            <details open><summary>フッター（自動・編集できません）</summary><pre data-footer class="mail-text"></pre></details>
+            <div class="actions"><button data-preview type="button">プレビュー</button><button data-test type="button">テスト送信</button><button data-save type="submit">下書き保存</button></div>
+            <p data-test-reason class="hint"></p>
+          </form>
+          <section data-fixed hidden><h2>固定した内容の確認</h2><p data-hash class="hash"></p><h3 data-fixed-subject></h3><pre data-fixed-text class="mail-text"></pre><label class="check"><input data-confirm-content type="checkbox">固定した内容を確認しました</label></section>
+        </div>
+        <aside>
+          <section class="panel">
+            <h2>配信日時</h2>
+            <label>配信方法<select data-mode><option value="NOW">承認後すぐ</option><option value="SCHEDULED">予約</option></select></label>
+            <label>予約日時（日本時間）<input data-at type="datetime-local" step="60" disabled></label>
+            <p data-hour-warning class="notice" hidden>00分は受信側が混み合います。05分など、毎正時を避けてください。</p>
+            <p class="hint">予約は5分後から90日後まで。別の配信が送信中なら、その終了を待ちます。</p>
+            <p>差出人名や件名で、別の送り手を装わないでください。申請すると件名・本文・フッターが固定されます。</p>
+            <button data-primary type="button" class="primary wide" disabled>承認申請</button><p data-primary-reason class="hint"></p>
+            <div data-reject-area hidden><label>差戻しの理由<textarea data-reject-reason maxlength="1000" rows="3"></textarea></label><button data-reject type="button">差戻し</button></div>
+          </section>
+          <section class="panel"><h2>配信状況</h2><p data-updated class="hint"></p><p data-next-at class="notice"></p><dl data-progress class="metrics"></dl><p class="hint">10秒ごとに更新。配送などの件数は数分遅れて反映されます。「配送」は受信側サーバーの受付で、受信トレイへの到達や開封を示しません。苦情にはGmail・iCloudの分は含まれません。</p>
+            <div data-remediation hidden><label>原因・是正内容・少量での再確認<textarea data-remediation-note maxlength="1000" rows="3"></textarea></label><label>確認の証跡（delivery-checks/ から始まる保存先）<input data-evidence autocomplete="off"></label></div>
+            <div class="actions"><button data-unschedule type="button">予約の取消</button><button data-pause type="button">一時停止</button><button data-resume type="button">再開</button><button data-cancel type="button" class="danger">中止</button></div><p data-control-reason class="hint"></p>
+          </section>
+        </aside>
+      </div>
+      <section data-review hidden class="panel"><h2>要確認：管理者の判断が必要です</h2><p>配送の記録を確かめてください。Sendイベントがないことは、送られていない証拠にはなりません。不明の宛先へ自動では送り直しません。</p><p data-review-range></p><pre data-review-recipients class="mail-text"></pre><details><summary>配送の記録を確認するAthenaクエリ</summary><pre data-query class="mail-text"></pre></details><label>判断<select data-decision></select></label><p data-review-risk class="notice"></p><label>確認した内容・判断の理由<textarea data-review-note maxlength="1000" rows="3"></textarea></label><button data-review-submit type="button" class="danger">判断を確定</button></section>
+      <section data-failures-section hidden class="panel"><h2>失敗・不明の宛先</h2><p>結果が不明な宛先へは自動で送り直しません。</p><div class="table-scroll"><table><thead><tr><th>宛先</th><th>分類</th><th>コード</th><th>時刻</th></tr></thead><tbody data-failures></tbody></table></div><button data-failures-next type="button" disabled>次へ</button></section>
+    </section>
+  </template>
+
+  <template id="contacts-template">
+    <section><div class="page-heading"><div><p class="eyebrow">同意と購読状態の管理</p><h1>宛先</h1></div></div><p data-message role="status" class="message"></p><p data-role-note class="hint"></p>
+      <section class="panel"><h2>宛先を探す</h2><form data-filter class="actions"><label>配信リスト<select name="topic"></select></label><label>購読状態<select name="status"><option value="">すべて</option><option value="OPT_IN">購読</option><option value="OPT_OUT">停止</option></select></label><button type="submit">絞り込む</button></form><form data-search class="actions"><label>メールアドレス（完全一致）<input name="email" type="email" required autocomplete="off"></label><button type="submit">検索</button></form><p class="hint">アドレスの部分一致検索はできません。1ページ50件です。</p><div class="table-scroll"><table><thead><tr><th>メールアドレス</th><th>全停止</th><th>配信リスト別の状態</th><th>詳細</th></tr></thead><tbody data-contacts></tbody></table></div><button data-next type="button" disabled>次へ</button></section>
+      <section data-contact-detail class="panel" hidden><h2>宛先の詳細</h2><p data-detail-address></p><p data-detail-name></p><p data-detail-topics></p><p data-detail-consent></p><p data-suppression></p></section>
+      <section data-write class="panel" hidden><h2>個別登録・購読の変更</h2><p>停止中の会員を購読に戻すには、管理者が新しい同意の証跡を登録してください。</p><form data-contact-form><label>メールアドレス<input name="email" type="email" required autocomplete="off"></label><label>名前（任意）<input name="name" maxlength="50" autocomplete="off"></label><fieldset data-topic-choices><legend>購読する配信リスト（複数選択）</legend></fieldset><label>同意の日時（日本時間）<input name="consent_at" type="datetime-local"></label><label>同意の取得経路<input name="consent_source" maxlength="100" autocomplete="off"></label><label>同意した案内文の版（任意）<input name="consent_version" maxlength="30"></label><label>操作<select name="operation"><option value="create">新規登録</option><option value="update">名前の変更・選んだ配信リストの追加購読</option><option value="unsubscribe">選んだ配信リストの停止（1つ選択）</option><option value="unsubscribe-all">全停止（退会）</option><option data-admin-option value="reconsent">購読の再開（新しい同意の証跡が必要）</option><option data-admin-option value="erase">完全削除</option></select></label><label>再開・完全削除の理由<textarea name="note" maxlength="1000" rows="3"></textarea></label><button data-contact-submit type="submit">実行</button></form></section>
+      <section data-import-area class="panel" hidden><h2>CSV取込</h2><p>新しい宛先だけを登録します。登録済みの宛先や停止状態は変わりません。</p><p class="hint">UTF-8・2MiB以下・20,000行以下。先頭行：email,name,consent_at,consent_source,consent_version,topics</p><form data-import-form class="actions"><label>CSVファイル<input name="file" type="file" accept=".csv,text/csv" required></label><button data-import-submit type="submit">取り込む</button></form><h3>取込履歴</h3><div class="table-scroll"><table><thead><tr><th>日時</th><th>状態</th><th>確認</th></tr></thead><tbody data-imports></tbody></table></div><button data-imports-next type="button" disabled>次へ</button><h3>取込結果</h3><p data-import-status></p><dl data-import-counts class="metrics"></dl><div class="table-scroll"><table><thead><tr><th>行番号</th><th>理由</th></tr></thead><tbody data-import-rows></tbody></table></div></section>
+    </section>
+  </template>
+
+  <template id="history-template">
+    <section><div class="page-heading"><div><p class="eyebrow">配信と結果の記録</p><h1>配信履歴</h1></div><a href="#/send">新しい配信を作成</a></div><p data-message role="status" class="message"></p><section class="panel"><p class="hint">新しい順に50件ずつ表示します。詳細画面では10秒ごとに件数を更新します。</p><div class="table-scroll"><table><thead><tr><th>状態</th><th>配信リスト・件名</th><th>作成日時／予約日時</th><th>送信済み（SES受付）／総数</th><th>失敗／不明</th></tr></thead><tbody data-history></tbody></table></div><button data-next type="button" disabled>次へ</button></section></section>
+  </template>
+
+  <template id="settings-template">
+    <section><div class="page-heading"><div><p class="eyebrow">配信組織の情報</p><h1>設定</h1></div></div><p data-message role="status" class="message"></p><p data-role-note class="hint"></p><section class="panel"><h2>組織設定</h2><p data-domain></p><form data-settings><fieldset data-fields><label>差出人名<input name="from_name" maxlength="64" required></label><label>差出人のアドレス（@より前）<input name="from_local" required autocomplete="off"></label><label>返信先（任意）<input name="reply_to" type="email" autocomplete="off"></label><label>送信者の名称<input name="sender_name" required></label><label>所在地<input name="address" required></label><label>問い合わせ先（メールアドレス・URL・電話番号）<input name="contact" required></label><label class="check"><input name="approval_required" type="checkbox" checked>承認を必要にする</label><p class="hint">承認を不要にできるのは、スタッフが1人だけの組織です。変更は監査ログに残ります。</p><label>送信速度の上限（1秒あたり）<input name="max_rate_per_sec" type="number" min="1" step="any" required></label><label>テスト送信先（最大5件、1行に1件）<textarea name="test_recipients" rows="5"></textarea></label><p class="hint">テスト送信先は宛先に登録し、配信リストを購読してください。差出人・返信先・法定表示には {{ と }} を使えません。</p><button type="submit">設定を保存</button></fieldset></form></section>
+      <section class="panel"><h2>受信確認の記録</h2><p data-delivery-status></p><p>本番配信には、90日以内で現在の設定と一致する受信確認の記録が必要です。送信元やDNSの設定を変えた場合は、確認をやり直してください。</p><form data-delivery-form hidden><label>確認結果<select name="passed"><option value="false">不合格（配信を止める）</option><option value="true">合格</option></select></label><label>確認内容<textarea name="note" required maxlength="1000" rows="3"></textarea></label><label>確認の証跡（delivery-checks/ から始まる保存先）<input name="evidence_key" required autocomplete="off"></label><label>送信設定の確認値（SHA-256）<input name="config_hash" required pattern="[a-f0-9]{64}"></label><label>DNS設定の確認値（SHA-256）<input name="dns_config_hash" required pattern="[a-f0-9]{64}"></label><fieldset data-cases><legend>受信確認の試験結果</legend></fieldset><button type="submit">受信確認の記録を登録</button></form></section>
+      <section data-audit-area class="panel" hidden><h2>監査ログ</h2><form data-audit-form class="actions"><label>対象月（UTC）<input name="month" type="month" required></label><button type="submit">表示</button></form><div class="table-scroll"><table><thead><tr><th>日時</th><th>操作</th><th>結果</th><th>対象</th><th>問い合わせ番号</th></tr></thead><tbody data-audit></tbody></table></div><button data-audit-next type="button" disabled>次へ</button></section>
+    </section>
+  </template>
+
+  <template id="preview-template"><dialog class="preview-dialog"><h2>プレビュー</h2><p data-hash class="hash"></p><h3 data-subject></h3><pre data-text class="mail-text"></pre><button data-close type="button">閉じる</button></dialog></template>
+  <template id="confirm-template"><dialog><h2>操作の確認</h2><p data-text></p><div class="actions"><button data-close type="button" autofocus>戻る</button><button data-confirm type="button" class="danger">確定する</button></div></dialog></template>
+</body>
+</html>

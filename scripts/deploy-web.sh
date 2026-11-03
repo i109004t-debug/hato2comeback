@@ -7,11 +7,12 @@ mkdir -p web
 # 値の出所は管理されたスタック出力だけ。秘密・トークンは書かない。
 AUTH=$(output AuthDomain); CLIENT=$(output WebClientId); REDIRECT=$(output RedirectUri)
 LOGOUT=$(output LogoutUri); API=$(output ApiBaseUrl); POOL=$(output UserPoolId)
-for value in "$AUTH" "$CLIENT" "$REDIRECT" "$LOGOUT" "$API" "$POOL"; do
+DOMAIN=$(output SenderDomainName)
+for value in "$AUTH" "$CLIENT" "$REDIRECT" "$LOGOUT" "$API" "$POOL" "$DOMAIN"; do
   [[ $value =~ ^[A-Za-z0-9:/._-]+$ ]] || die 'Unexpected characters in web output'
 done
-printf '{"env":"%s","region":"%s","authDomain":"%s","clientId":"%s","userPoolId":"%s","redirectUri":"%s","logoutUri":"%s","apiBaseUrl":"%s"}\n' \
-  "$ENV" "$REGION" "$AUTH" "$CLIENT" "$POOL" "$REDIRECT" "$LOGOUT" "$API" > web/config.json
+printf '{"env":"%s","region":"%s","authDomain":"%s","clientId":"%s","userPoolId":"%s","redirectUri":"%s","logoutUri":"%s","apiBaseUrl":"%s","senderDomain":"%s"}\n' \
+  "$ENV" "$REGION" "$AUTH" "$CLIENT" "$POOL" "$REDIRECT" "$LOGOUT" "$API" "$DOMAIN" > web/config.json
 [[ ${2:-} != config-only ]] || exit 0
 [[ -f web/index.html && -f web/callback.html ]] || die 'Web application is not present; generated config.json only'
 BUCKET=$(output WebBucketName); DIST=$(output DistributionId)

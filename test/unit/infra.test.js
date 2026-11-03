@@ -353,6 +353,7 @@ test('15.3 web/config.jsonは出力から生成され、秘密が含まれない
     const c=JSON.parse(readFileSync(p,'utf8'));
     assert.equal(c.clientId,'exampleclient123');
     assert.equal(c.apiBaseUrl,'/api/v1');
+    assert.equal(c.senderDomain,'fc.dev.example.jp');
     assert.equal(c.redirectUri,'https://app.dev.example.jp/callback.html');
     assert.equal(c.env,'dev');
     assert.doesNotMatch(JSON.stringify(c),/secret|token|password/i);
