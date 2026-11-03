@@ -4,7 +4,7 @@ import { ulid } from '../../common/ids.js';
 import { createFooter } from '../../common/footer.js';
 import { formatFrom, maskEmail } from '../../common/email.js';
 import { addressHash } from '../../common/log.js';
-import { assertIndependentApproval, authorize, requiresEmailMask } from '../../common/authz.js';
+import { assertIndependentApproval, authorize } from '../../common/authz.js';
 import { bodyWarnings } from '../../common/validate.js';
 import { listRecords, objectText, timestamp, updateCampaign, conflict } from '../../common/records.js';
 import { createSender, buildSendInput } from '../../common/sender.js';
@@ -45,7 +45,7 @@ async function check(ctx, campaign, extra = {}) {
 
 async function create({ runtime, body, user, topicDefinitions }) {
   const id = (runtime.id ?? ulid)();
-  const campaign = { PK: 'CAMPAIGN', SK: id, campaign_id: id, ...body, topic_display: topicDefinitions.find((item) => item.TopicName === body.topic)?.DisplayName ?? body.topic, status: 'DRAFT', version: 0, rev: 0, created_by: user.sub, created_at: timestamp(runtime), updated_at: timestamp(runtime) };
+  const campaign = { schema_version: 1, PK: 'CAMPAIGN', SK: id, campaign_id: id, ...body, topic_display: topicDefinitions.find((item) => item.TopicName === body.topic)?.DisplayName ?? body.topic, status: 'DRAFT', version: 0, rev: 0, created_by: user.sub, created_at: timestamp(runtime), updated_at: timestamp(runtime) };
   await runtime.store.put(campaign);
   return { statusCode: 201, data: { ...clean(campaign), warnings: bodyWarnings(body.body_text) } };
 }
@@ -421,7 +421,7 @@ async function failures(ctx) {
     }
     for (const line of text.trimEnd().split('\n').filter(Boolean)) {
       const item = JSON.parse(line);
-      rows.push({ e: requiresEmailMask(ctx.user) ? maskEmail(item.e) : item.e, r: item.r, c: item.c, t: item.t });
+      rows.push({ a: item.a, m: item.m, r: item.r, c: item.c, t: item.t, ci: item.ci, ix: item.ix });
     }
   }
   const end = offset + ctx.query.limit;

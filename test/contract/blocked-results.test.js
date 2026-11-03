@@ -29,7 +29,7 @@ for (const operation of ['topic', 'all', 'erase']) {
     f.role = 'viewer'; f.resetApi();
     const masked = (await f.request(`GET ${f.campaignPath}/failures`)).json.items[0];
     assert.equal(masked.r, 'SKIPPED');
-    assert.ok(masked.e.includes('*'));
+    assert.ok(masked.m.includes('*'));
   });
 }
 

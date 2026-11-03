@@ -26,6 +26,19 @@ Parameters:
     AllowedPattern: '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
   AlertEmail:
     Type: String
+  AuditLockMode:
+    Type: String
+    Default: GOVERNANCE
+    AllowedValues: [GOVERNANCE, COMPLIANCE]
+  AuditLockDays:
+    Type: Number
+    Default: 400
+    MinValue: 1
+    MaxValue: 36500
+  RuntimeVersionArn:
+    Type: String
+    Default: ''
+    AllowedPattern: '(^$|arn:aws:lambda:[a-z0-9-]+::runtime:[a-f0-9]+)'
   WorkerReservedConcurrency:
     Type: Number
     Default: -1
@@ -72,6 +85,7 @@ Rules:
       - Assert: !Not [!Equals [!Ref Topic1Name, !Ref Topic2Name]]
         AssertDescription: Topic names must be unique
 Conditions:
+  HasRuntimeVersion: !Not [!Equals [!Ref RuntimeVersionArn, '']]
   HasWorkerReservedConcurrency: !Not [!Equals [!Ref WorkerReservedConcurrency, '-1']]
   IsProd: !Equals [!Ref Env, prod]
   HasTopic2: !Not [!Equals [!Ref Topic2Name, '']]
@@ -101,6 +115,31 @@ Resources:
           - {Id: Contacts, Status: Enabled, Prefix: backups/contacts/, ExpirationInDays: 365}
           - {Id: DeliveryChecks, Status: Enabled, Prefix: delivery-checks/, ExpirationInDays: 180}
           - {Id: Multipart, Status: Enabled, AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}}
+  AuditArchiveBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ObjectLockEnabled: true
+      ObjectLockConfiguration:
+        ObjectLockEnabled: Enabled
+        Rule:
+          DefaultRetention: {Mode: !Ref AuditLockMode, Days: !Ref AuditLockDays}
+      VersioningConfiguration: {Status: Enabled}
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]}
+  AuditArchiveBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AuditArchiveBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt AuditArchiveBucket.Arn, !Sub '${AuditArchiveBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
   EventLogBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: RetainExceptOnCreate
@@ -156,6 +195,7 @@ Resources:
       TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
       DeletionProtectionEnabled: !If [IsProd, true, false]
       SSESpecification: {SSEEnabled: true}
+      StreamSpecification: {StreamViewType: NEW_AND_OLD_IMAGES}
   ConfigurationSet:
     Type: AWS::SES::ConfigurationSet
     Properties:
@@ -391,17 +431,36 @@ Resources:
         GenerateStringKey: current
         PasswordLength: 64
         ExcludePunctuation: true
-  EraseSecret:
+  AddressHmacSecret:
     Type: AWS::SecretsManager::Secret
     DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
-      Name: !Sub '/ht2/${Env}/erase-hmac'
+      Name: !Sub '/ht2/${Env}/address-hmac'
       GenerateSecretString:
-        SecretStringTemplate: '{}'
+        SecretStringTemplate: '{"kid":"k1"}'
         GenerateStringKey: key
         PasswordLength: 64
         ExcludePunctuation: true
+  EraseMacKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      KeySpec: HMAC_256
+      KeyUsage: GENERATE_VERIFY_MAC
+      PendingWindowInDays: 30
+      KeyPolicy:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnableAccountPermissions
+            Effect: Allow
+            Principal: {AWS: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'}
+            Action: 'kms:*'
+            Resource: '*'
+  AuditLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/lambda/ht2-${Env}-audit', RetentionInDays: 365}
   ApiLogGroup:
     Type: AWS::Logs::LogGroup
     Properties: {LogGroupName: !Sub '/aws/lambda/ht2-${Env}-api', RetentionInDays: 365}
@@ -442,6 +501,10 @@ Resources:
     Properties:
       FunctionName: !Sub 'ht2-${Env}-api'
       Runtime: nodejs24.x
+      RuntimeManagementConfig: !If
+        - HasRuntimeVersion
+        - {UpdateRuntimeOn: Manual, RuntimeVersionArn: !Ref RuntimeVersionArn}
+        - {UpdateRuntimeOn: FunctionUpdate}
       Architectures: [arm64]
       Handler: src/api/handler.handler
       Code: ../build/backend/
@@ -467,7 +530,8 @@ Resources:
           WORKER_FUNCTION_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ht2-${Env}-worker'
           CONFIG_PARAM: !Sub '/ht2/${Env}/config'
           ORIGIN_SECRET_ARN: !Ref OriginSecret
-          ERASE_SECRET_ARN: !Ref EraseSecret
+          ADDRESS_HMAC_SECRET_ARN: !Ref AddressHmacSecret
+          ERASE_MAC_KEY_ID: !Ref EraseMacKey
           LOG_LEVEL: INFO
   WorkerFunction:
     Type: AWS::Lambda::Function
@@ -475,6 +539,10 @@ Resources:
     Properties:
       FunctionName: !Sub 'ht2-${Env}-worker'
       Runtime: nodejs24.x
+      RuntimeManagementConfig: !If
+        - HasRuntimeVersion
+        - {UpdateRuntimeOn: Manual, RuntimeVersionArn: !Ref RuntimeVersionArn}
+        - {UpdateRuntimeOn: FunctionUpdate}
       Architectures: [arm64]
       Handler: src/worker/handler.handler
       Code: ../build/backend/
@@ -485,6 +553,7 @@ Resources:
       LoggingConfig: {LogFormat: JSON, LogGroup: !Ref WorkerLogGroup}
       Environment:
         Variables:
+          AUDIT_ARCHIVE_BUCKET: !Ref AuditArchiveBucket
           ENV: !Ref Env
           TABLE_NAME: !Ref Table
           DATA_BUCKET: !Ref DataBucket
@@ -501,8 +570,64 @@ Resources:
           WORKER_FUNCTION_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ht2-${Env}-worker'
           CONFIG_PARAM: !Sub '/ht2/${Env}/config'
           ORIGIN_SECRET_ARN: !Ref OriginSecret
-          ERASE_SECRET_ARN: !Ref EraseSecret
+          ADDRESS_HMAC_SECRET_ARN: !Ref AddressHmacSecret
+          ERASE_MAC_KEY_ID: !Ref EraseMacKey
           LOG_LEVEL: INFO
+  AuditRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - {Effect: Allow, Principal: {Service: lambda.amazonaws.com}, Action: 'sts:AssumeRole'}
+      Policies:
+        - PolicyName: AuditArchive
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ht2-${Env}-audit:*'
+              - Effect: Allow
+                Action: ['dynamodb:DescribeStream', 'dynamodb:GetRecords', 'dynamodb:GetShardIterator', 'dynamodb:ListStreams']
+                Resource: !GetAtt Table.StreamArn
+              - Effect: Allow
+                Action: ['s3:PutObject']
+                Resource: [!Sub '${AuditArchiveBucket.Arn}/audit/*', !Sub '${AuditArchiveBucket.Arn}/tamper/*']
+  AuditFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: AuditLogGroup
+    Properties:
+      FunctionName: !Sub 'ht2-${Env}-audit'
+      Runtime: nodejs24.x
+      RuntimeManagementConfig: !If
+        - HasRuntimeVersion
+        - {UpdateRuntimeOn: Manual, RuntimeVersionArn: !Ref RuntimeVersionArn}
+        - {UpdateRuntimeOn: FunctionUpdate}
+      Architectures: [arm64]
+      Handler: src/audit/handler.handler
+      Code: ../build/backend/
+      Role: !GetAtt AuditRole.Arn
+      MemorySize: 256
+      Timeout: 60
+      LoggingConfig: {LogFormat: JSON, LogGroup: !Ref AuditLogGroup}
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          AUDIT_ARCHIVE_BUCKET: !Ref AuditArchiveBucket
+  AuditStreamMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      FunctionName: !Ref AuditFunction
+      EventSourceArn: !GetAtt Table.StreamArn
+      StartingPosition: TRIM_HORIZON
+      BatchSize: 100
+      BisectBatchOnFunctionError: true
+      MaximumRetryAttempts: -1
+      MaximumRecordAgeInSeconds: -1
+      FilterCriteria:
+        Filters:
+          - Pattern: '{"dynamodb":{"Keys":{"PK":{"S":[{"prefix":"AUDIT#"}]}}}}'
   WorkerEventInvokeConfig:
     Type: AWS::Lambda::EventInvokeConfig
     Properties: {FunctionName: !Ref WorkerFunction, Qualifier: '$LATEST', MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 60}
@@ -725,6 +850,9 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
+            Action: ['kms:GenerateMac']
+            Resource: !GetAtt EraseMacKey.Arn
+          - Effect: Allow
             Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
             Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ht2-${Env}-api:*'
           - Effect: Allow
@@ -732,7 +860,7 @@ Resources:
             Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ht2/${Env}/config'
           - Effect: Allow
             Action: ['secretsmanager:GetSecretValue']
-            Resource: [!Ref OriginSecret, !Ref EraseSecret]
+            Resource: [!Ref OriginSecret, !Ref AddressHmacSecret]
           - Effect: Allow
             # TransactWriteItemsは内包するPutのdynamodb:PutItemで認可される。
             Action: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:Query']
@@ -805,6 +933,19 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
+            Action: ['kms:GenerateMac', 'kms:DescribeKey']
+            Resource: !GetAtt EraseMacKey.Arn
+          - Effect: Allow
+            Action: ['s3:ListBucket']
+            Resource: !GetAtt AuditArchiveBucket.Arn
+          - Effect: Allow
+            Action: ['s3:GetObject']
+            Resource: !Sub '${AuditArchiveBucket.Arn}/*'
+          - Effect: Allow
+            Action: ['dynamodb:DeleteItem']
+            Resource: !GetAtt Table.Arn
+            Condition: {'ForAllValues:StringEquals': {'dynamodb:LeadingKeys': [CONTACT_META]}}
+          - Effect: Allow
             Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
             Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ht2-${Env}-worker:*'
           - Effect: Allow
@@ -812,7 +953,7 @@ Resources:
             Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ht2/${Env}/config'
           - Effect: Allow
             Action: ['secretsmanager:GetSecretValue']
-            Resource: !Ref EraseSecret
+            Resource: !Ref AddressHmacSecret
           - Effect: Allow
             Action: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:Query', 'dynamodb:BatchGetItem']
             Resource: !GetAtt Table.Arn
@@ -1327,7 +1468,58 @@ Resources:
           A11: !Ref SystemPauseReason11Alarm
           A12: !Ref SystemPauseReason12Alarm
           A13: !Ref SystemPauseReason13Alarm
+  AuditTamperAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'ht2-${Env}-audit-tamper'
+      AlarmActions: [!Ref AlertTopic]
+      Namespace: !Sub 'HT2/${Env}'
+      MetricName: AuditTamper
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: notBreaching
+  AuditArchiveLagAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'ht2-${Env}-audit-archive-lag'
+      AlarmActions: [!Ref AlertTopic]
+      Namespace: AWS/Lambda
+      MetricName: IteratorAge
+      Dimensions: [{Name: FunctionName, Value: !Ref AuditFunction}]
+      Statistic: Maximum
+      Period: 300
+      Threshold: 900000
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: notBreaching
+  AuditArchiveErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'ht2-${Env}-audit-archive-errors'
+      AlarmActions: [!Ref AlertTopic]
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{Name: FunctionName, Value: !Ref AuditFunction}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: notBreaching
 Outputs:
+  TableName:
+    Value: !Ref Table
+  AuditFunctionName:
+    Value: !Ref AuditFunction
+  ApiFunctionName:
+    Value: !Ref ApiFunction
+  AuditArchiveBucketName:
+    Value: !Ref AuditArchiveBucket
+  EraseMacKeyArn:
+    Value: !GetAtt EraseMacKey.Arn
   Environment:
     Value: !Ref Env
   AccountId:
@@ -1376,8 +1568,8 @@ Outputs:
     Value: !Sub '/ht2/${Env}/config'
   OriginSecretArn:
     Value: !Ref OriginSecret
-  EraseSecretArn:
-    Value: !Ref EraseSecret
+  AddressHmacSecretArn:
+    Value: !Ref AddressHmacSecret
   AthenaWorkGroupName:
     Value: !Ref AthenaWorkGroup
   Dkim1Name:

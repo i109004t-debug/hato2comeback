@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # テスト専用。実際のaws実行ファイルへフォールバックしない。
+date() {
+  if [[ ${MOCK_EPOCH:-} != '' && $* == '-u +%s' ]]; then printf '%s\n' "$MOCK_EPOCH"; else command date "$@"; fi
+}
 mock_aws() {
   printf '%s\n' "$*" >> "$MOCK_CALLS"
   local args="$*"
@@ -14,6 +17,7 @@ mock_aws() {
       printf '  OtherResource:\n    Type: example\n'
       ;;
     'cloudformation list-stacks') printf '%s\n' "${MOCK_STATUS:-UPDATE_COMPLETE}" ;;
+    'cloudformation list-stack-resources') printf 'ht2-dev-api\tht2-dev-worker\tht2-dev-audit\n' ;;
     'cloudformation describe-stacks')
       case "$args" in
         *StackStatus*) printf '%s\n' "${MOCK_STATUS:-UPDATE_COMPLETE}" ;;
@@ -31,6 +35,7 @@ mock_aws() {
         *"OutputKey=='ApiBaseUrl'"*) printf '/api/v1\n' ;;
         *"OutputKey=='SenderDomainName'"*) printf 'fc.dev.example.jp\n' ;;
         *"OutputKey=='DataBucketName'"*) printf 'example-data\n' ;;
+        *"OutputKey=='TableName'"*) printf 'ht2-dev\n' ;;
         *"OutputKey=='ContactListName'"*) printf 'ht2\n' ;;
         *"OutputKey=='WorkerFunctionName'"*) printf 'ht2-dev-worker\n' ;;
         *"OutputKey=='StateMachineArn'"*) printf 'arn:aws:states:ap-northeast-1:111111111111:stateMachine:ht2-dev\n' ;;
@@ -46,7 +51,9 @@ mock_aws() {
     'sesv2 get-contact-list') printf 'kaiho\tevent\n' ;;
     'sesv2 get-account') [[ ${MOCK_ACCOUNT_ERROR:-0} == 0 ]] || return 254; printf '%s\n' "${MOCK_PRODUCTION:-True}" ;;
     'lambda invoke')
-      printf '%s\n' "${MOCK_SDK_RESULT:-{\"ok\":true,\"packages\":[]}}" > "${@: -1}"
+      local sdk_result=${MOCK_SDK_RESULT:-}
+      if [[ -z $sdk_result ]]; then sdk_result='{"ok":true,"packages":[]}'; fi
+      printf '%s\n' "$sdk_result" > "${@: -1}"
       printf '%s\n' "${MOCK_FUNCTION_ERROR:-None}" ;;
     'cloudfront get-distribution'|'stepfunctions describe-state-machine'|'sesv2 get-configuration-set-event-destinations'|'cloudwatch describe-alarms') printf '{}\n' ;;
     'ssm get-parameter')
@@ -60,10 +67,13 @@ mock_aws() {
     'cloudfront create-invalidation') printf 'EXAMPLEINVALIDATION\n' ;;
     'cloudfront wait') ;;
     'lambda get-function-concurrency') printf '%s\n' "${MOCK_CONCURRENCY:-0}" ;;
+    'lambda get-function-configuration') printf '%s\n' "${MOCK_RUNTIME_ARN:-arn:aws:lambda:ap-northeast-1::runtime:abcdef}" ;;
     'lambda put-function-concurrency'|'lambda delete-function-concurrency') ;;
     'dynamodb get-item') printf '%s\n' "${MOCK_OWNER:-restore:dev}" ;;
     'dynamodb update-item') ;;
-    'dynamodb query') printf '{"Items":[]}\n' ;;
+    'dynamodb query')
+      [[ ${MOCK_CAMPAIGN_ERROR:-0} == 0 ]] || return 254
+      if [[ $args == *--projection-expression* ]]; then printf '%s' "${MOCK_CAMPAIGNS:-}"; else printf '{"Items":[]}\n'; fi ;;
     'sesv2 list-contacts') printf '{"Contacts":[]}\n' ;;
     's3api head-object')
       if [[ $args == *.manifest.json* && ${MOCK_MANIFEST_ERROR:-} != '' ]]; then

@@ -2,6 +2,7 @@ import { now as defaultNow } from './time.js';
 import { API_ROUTES } from './router.js';
 
 export const METRIC_UNITS = Object.freeze({
+  AuditTamper: 'Count',
   Accepted: 'Count', Failed: 'Count', Unknown: 'Count', Throttled: 'Count',
   Paused: 'Count', NeedsReview: 'Count', StartFailed: 'Count', PrepareRecipients: 'Count', PrepareSeconds: 'Seconds',
   SesBusy: 'Count', ImportRows: 'Count', ImportSkipped: 'Count', ImportRejected: 'Count',

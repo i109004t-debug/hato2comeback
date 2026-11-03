@@ -10,6 +10,7 @@ import { createAudit } from '../common/audit.js';
 import { createLogger } from '../common/log.js';
 import { createTime } from '../common/time.js';
 import { createMetrics } from '../common/metrics.js';
+import { apiSchemaStore } from '../common/schema.js';
 import { createAuthz, authorize } from '../common/authz.js';
 import { accessClaims, assertOrigin, assertRequestUrl, errorResponse, jsonResponse, parseJsonBody } from '../common/http.js';
 import { resolveRoute } from '../common/router.js';
@@ -35,6 +36,7 @@ export function createHandler(deps = {}) {
     clientId: environment.WEB_CLIENT_ID, userPoolId: environment.USER_POOL_ID,
     stateMachineArn: environment.STATE_MACHINE_ARN, scheduleGroup: environment.SCHEDULE_GROUP,
     schedulerRoleArn: environment.SCHEDULER_ROLE_ARN, workerFunctionArn: environment.WORKER_FUNCTION_ARN,
+    eraseMacKeyId: environment.ERASE_MAC_KEY_ID,
     ...createTime(deps), ...deps,
   };
   let runtime;
@@ -42,7 +44,7 @@ export function createHandler(deps = {}) {
     if (runtime) return runtime;
     runtime = { ...createAwsAdapters({ region: base.region }), ...base, statsCache: new Map() };
     runtime.accountId ??= context.invokedFunctionArn?.split(':')[4];
-    runtime.store ??= createDdb(runtime);
+    runtime.store = apiSchemaStore(runtime.store ?? createDdb(runtime));
     runtime.metrics ??= createMetrics(runtime);
     runtime.config ??= createConfig(runtime);
     runtime.secrets = deps.secretsProvider ?? createSecrets(runtime);
@@ -66,7 +68,8 @@ export function createHandler(deps = {}) {
       route = resolveRoute(event.requestContext?.http?.method, event.rawPath);
       const user = await services.authz.resolveUser(claims.sub);
       authorize(user, route.operation, { pause_reason: 'USER' });
-      const secret = await services.secrets.get('erase-hmac');
+      const secret = await services.secrets.get('address-hmac');
+      services.addressSecret = secret;
       services.hmacKey = secret.key;
       const auditService = deps.audit ?? createAudit({ ...services, hmacKey: services.hmacKey });
       services.audit = auditService;

@@ -1,12 +1,15 @@
 import { buildUpdate, createExpressions, decodeCursor, campaignUpdate } from './ddb.js';
 import { AppError } from './http.js';
+import { assertSupportedSchema } from './schema.js';
 
 export const conflict = (error) => ['STATE_CONFLICT', 'VERSION_CONFLICT'].includes(error.code) || error.name === 'ConditionalCheckFailedException';
 export const timestamp = (runtime) => new Date(runtime.now()).toISOString();
 
 export async function updateRecord(runtime, PK, SK, current, set, remove = []) {
+  if (['CAMPAIGN', 'IMPORT'].includes(PK)) assertSupportedSchema(current);
   const expressions = createExpressions();
-  const ConditionExpression = current ? Number.isSafeInteger(current.version) ? expressions.equals('version', current.version) : `attribute_exists(${expressions.name('PK')}) AND ${expressions.notExists('version')}` : expressions.notExists('PK');
+  let ConditionExpression = current ? Number.isSafeInteger(current.version) ? expressions.equals('version', current.version) : `attribute_exists(${expressions.name('PK')}) AND ${expressions.notExists('version')}` : expressions.notExists('PK');
+  if (current && ['CAMPAIGN', 'IMPORT'].includes(PK)) ConditionExpression += ` AND ${expressions.equals('schema_version', 1)}`;
   return runtime.store.update(PK, SK, {
     ConditionExpression,
     ...buildUpdate({ set: { ...set, version: (current?.version ?? 0) + 1, updated_at: timestamp(runtime) }, remove }, expressions),
@@ -14,6 +17,7 @@ export async function updateRecord(runtime, PK, SK, current, set, remove = []) {
 }
 
 export async function updateCampaign(runtime, campaign, statuses, set, remove = []) {
+  assertSupportedSchema(campaign);
   if (!statuses.includes(campaign.status)) throw new AppError('STATE_CONFLICT', 409, '配信状態が変更されています。');
   const update = campaignUpdate({ version: campaign.version, from: statuses, set: { ...set, updated_at: timestamp(runtime) } });
   if (remove.length) {

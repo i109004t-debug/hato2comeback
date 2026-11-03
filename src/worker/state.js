@@ -1,6 +1,7 @@
 import { buildUpdate, campaignUpdate, createExpressions } from '../common/ddb.js';
 import { normalizeEmail } from '../common/email.js';
 import { AppError } from '../common/http.js';
+import { assertSupportedSchema } from '../common/schema.js';
 
 export const isConflict = (error) => ['STATE_CONFLICT', 'VERSION_CONFLICT'].includes(error.code) || error.name === 'ConditionalCheckFailedException';
 export const output = (action, fields = {}) => ({ action, ...fields });
@@ -8,6 +9,7 @@ export const output = (action, fields = {}) => ({ action, ...fields });
 export async function change(runtime, id, executionArn, statuses, set, match = () => true) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const campaign = await runtime.store.get('CAMPAIGN', id);
+    assertSupportedSchema(campaign);
     if (!campaign || executionArn && campaign.execution_arn !== executionArn || !statuses.includes(campaign.status) || !match(campaign)) return campaign;
     try {
       return await runtime.store.update('CAMPAIGN', id, campaignUpdate({
@@ -42,10 +44,11 @@ export async function readChunk(runtime, campaign, chunk = campaign.progress.chu
 export async function flush(runtime, campaignId, executionArn, progress, pending, limiter, lastSendAt, extra = {}) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const current = await runtime.store.get('CAMPAIGN', campaignId);
+    assertSupportedSchema(current);
     if (!current || current.execution_arn !== executionArn) return current;
     const expressions = createExpressions();
     // 状態条件は付けない。停止・中止後も、受付済みの件数を失わない。
-    const ConditionExpression = `${expressions.equals('execution_arn', executionArn)} AND ${expressions.equals('version', current.version)}`;
+    const ConditionExpression = `${expressions.equals('execution_arn', executionArn)} AND ${expressions.equals('version', current.version)} AND ${expressions.equals('schema_version', 1)}`;
     const counts = { ...current.counts };
     for (const field of ['accepted', 'failed', 'unknown', 'skipped_blocked']) counts[field] = (counts[field] ?? 0) + (pending[field] ?? 0);
     try {

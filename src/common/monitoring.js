@@ -48,7 +48,7 @@ export function createMonitoring(deps) {
     assertHealthy(!(metrics.rendering > 0 || metrics.reject > 0), 'CONTENT_ERROR');
   };
   return {
-    async check({ campaign, config, test = false, deliveryValid = false, checkRatios = false, recent = false }) {
+    async check({ campaign, config, test = false, deliveryValid = false, checkRatios = false, recent = false, daily = false }) {
       try {
         const names = [...config.reputation_alarms, ...(deps.monitoringAlarms ?? monitoringAlarmNames(env))];
         const response = await cloudwatch.describeAlarms({ AlarmNames: names });
@@ -60,7 +60,7 @@ export function createMonitoring(deps) {
             assertHealthy(false, config.reputation_alarms.includes(name) ? 'REPUTATION_ALARM' : name.endsWith('rendering-or-reject') ? 'CONTENT_ERROR' : 'EVENT_LOG_STALE');
           }
           // 本番の観測不足は受入記録で判断し、検証環境では初回の一般配信も許可する。
-          if (config.reputation_alarms.includes(name) && alarm.StateValue === 'INSUFFICIENT_DATA') assertHealthy(env !== 'prod' || test || deliveryValid, 'MONITORING_UNAVAILABLE');
+          if (!daily && config.reputation_alarms.includes(name) && alarm.StateValue === 'INSUFFICIENT_DATA') assertHealthy(env !== 'prod' || test || deliveryValid, 'MONITORING_UNAVAILABLE');
         }
         if (campaign?.started_at) {
           const metrics = await totals(campaign);

@@ -109,7 +109,7 @@ export function buildUpdate({ set = {}, remove = [], add = {}, delete: del = {} 
 export function campaignUpdate({ version, from, set = {} }) {
   if (!Number.isSafeInteger(version) || version < 0 || !Array.isArray(from) || !from.length || 'version' in set) throw new TypeError('Invalid campaign update');
   const expressions = createExpressions();
-  const ConditionExpression = `${expressions.in('status', from)} AND ${expressions.equals('version', version)}`;
+  const ConditionExpression = `${expressions.in('status', from)} AND ${expressions.equals('version', version)} AND ${expressions.equals('schema_version', 1)}`;
   return { ConditionExpression, ...buildUpdate({ set: { ...set, version: version + 1 } }, expressions) };
 }
 
@@ -183,6 +183,15 @@ export function createDdb({ ddb, tableName }) {
         return result.Attributes ? unmarshall(result.Attributes) : undefined;
       } catch (error) {
         if (error.name === 'ConditionalCheckFailedException') throw new AppError(PK === 'CAMPAIGN' ? 'STATE_CONFLICT' : 'VERSION_CONFLICT', 409, 'データが変更されています。');
+        throw error;
+      }
+    },
+    async delete(PK, SK, condition) {
+      writable(PK, condition.ConditionExpression);
+      try {
+        return await ddb.deleteItem({ ...condition, TableName: tableName, Key: key(PK, SK) });
+      } catch (error) {
+        if (error.name === 'ConditionalCheckFailedException') throw new AppError('VERSION_CONFLICT', 409, 'データが変更されています。');
         throw error;
       }
     },

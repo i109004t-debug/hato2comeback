@@ -1,4 +1,7 @@
 export const ERROR_MESSAGES = Object.freeze({
+  CONSENT_SOURCE_HAS_ADDRESS: '同意の取得経路にはメールアドレスを含めず、申込方法などを記入してください。',
+  ERASE_CHECK_UNAVAILABLE: '完全削除の記録を確認できません。AWSの管理者が鍵の状態を確認してください。',
+  UNSUPPORTED_SCHEMA: 'この記録の形式に対応していません。AWSの管理者が実行環境とコードの版を確認してください。',
   AUTH_CHECK_STALE: '設定を変更したため、送信元の確認をやり直しています。数分後にもう一度お試しください。',
   IMPORT_REQUIRES_PRODUCTION: 'SESのサンドボックスではCSV取込を使えません。1件ずつ登録してください。',
   INVALID_REQUEST: '入力の形式を確認してください。', UNAUTHENTICATED: 'ログインの有効期限が切れました。再ログインしてください。',

@@ -1,8 +1,11 @@
 import { change, currentAction, output, readChunk, workflowStep } from '../state.js';
 
+import { reviewUnsupportedSchema } from '../../common/schema.js';
+
 export async function finish(event, runtime) {
   const { campaign_id: id, execution_arn: executionArn } = event;
   let campaign = await runtime.store.get('CAMPAIGN', id);
+  if (await reviewUnsupportedSchema(runtime, campaign)) return output('REVIEW', { reason: 'UNSUPPORTED_SCHEMA' });
   if (event.outcome === 'START_FAILED' && campaign?.status === 'APPROVED' && campaign.start_error) return output('START_FAILED');
   if (!campaign || campaign.execution_arn !== executionArn) return output('CANCELLED');
   const outcome = event.outcome ?? event.result?.action;

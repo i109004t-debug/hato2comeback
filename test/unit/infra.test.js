@@ -19,6 +19,67 @@ const resources = blocks(main);
 const outputs = blocks(main, 'Outputs');
 const scripts = readdirSync(new URL('../../scripts/', import.meta.url)).filter((f) => f.endsWith('.sh'));
 
+test('第9段階 4.6 監査保管庫はObject Lock・保持・暗号化・公開ブロック・TLSを持つ', () => {
+  const parameters = blocks(main, 'Parameters');
+  assert.match(parameters.AuditLockMode, /Default: GOVERNANCE\n    AllowedValues: \[GOVERNANCE, COMPLIANCE\]/);
+  assert.match(parameters.AuditLockDays, /Default: 400/);
+  assert.match(resources.Table, /StreamSpecification: \{StreamViewType: NEW_AND_OLD_IMAGES\}/);
+  const bucket = resources.AuditArchiveBucket;
+  for (const requirement of ['ObjectLockEnabled: true', 'ObjectLockEnabled: Enabled', 'Mode: !Ref AuditLockMode, Days: !Ref AuditLockDays', 'VersioningConfiguration: {Status: Enabled}', 'SSEAlgorithm: AES256', 'BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true', 'DeletionPolicy: Retain\n    UpdateReplacePolicy: Retain']) assert.ok(bucket.includes(requirement), requirement);
+  assert.match(resources.AuditArchiveBucketPolicy, /aws:SecureTransport': 'false'/);
+});
+
+test('第9段階 4.6 AuditFunctionは同環境のストリーム読取・2つのS3接頭辞・ログだけを許可する', () => {
+  assert.match(resources.AuditFunction, /FunctionName: !Sub 'ht2-\$\{Env\}-audit'/);
+  assert.match(resources.AuditFunction, /Handler: src\/audit\/handler.handler/);
+  assert.match(resources.AuditFunction, /Role: !GetAtt AuditRole.Arn/);
+  const actions = allowed(resources.AuditRole);
+  assert.deepEqual([...actions].sort(), ['logs:CreateLogStream', 'logs:PutLogEvents', 'dynamodb:DescribeStream', 'dynamodb:GetRecords', 'dynamodb:GetShardIterator', 'dynamodb:ListStreams', 's3:PutObject'].sort());
+  assert.match(resources.AuditRole, /Resource: !GetAtt Table.StreamArn/);
+  assert.match(resources.AuditRole, /Resource: \[!Sub '\$\{AuditArchiveBucket.Arn\}\/audit\/\*', !Sub '\$\{AuditArchiveBucket.Arn\}\/tamper\/\*'\]/);
+  assert.doesNotMatch(resources.AuditRole, /ses:|dynamodb:(?:GetItem|PutItem|UpdateItem|DeleteItem|Query|Scan)|s3:(?:DeleteObject|GetObject|BypassGovernanceRetention)/);
+  assert.match(resources.WorkerPolicy, /Action: \['s3:ListBucket'\]\n\s+Resource: !GetAtt AuditArchiveBucket.Arn/);
+  assert.match(resources.WorkerPolicy, /Action: \['s3:GetObject'\]\n\s+Resource: !Sub '\$\{AuditArchiveBucket.Arn\}\/\*'/);
+  assert.doesNotMatch(resources.ApiPolicy, /AuditArchiveBucket/);
+});
+
+test('第9段階 4.6 監査Streamsの絞込と無期限再試行・二分割、3つのアラームを定義する', () => {
+  const mapping = resources.AuditStreamMapping;
+  assert.match(mapping, /EventSourceArn: !GetAtt Table.StreamArn/);
+  for (const setting of ['StartingPosition: TRIM_HORIZON', 'BisectBatchOnFunctionError: true', 'MaximumRetryAttempts: -1', 'MaximumRecordAgeInSeconds: -1']) assert.ok(mapping.includes(setting));
+  const pattern = JSON.parse(/Pattern: '([^']+)'/.exec(mapping)[1]);
+  assert.deepEqual(pattern, { dynamodb: { Keys: { PK: { S: [{ prefix: 'AUDIT#' }] } } } });
+  assert.doesNotMatch(mapping, /ReportBatchItemFailures/);
+  for (const [name, suffix] of [['AuditTamperAlarm', 'audit-tamper'], ['AuditArchiveLagAlarm', 'audit-archive-lag'], ['AuditArchiveErrorsAlarm', 'audit-archive-errors']]) {
+    assert.ok(resources[name].includes(`AlarmName: !Sub 'ht2-\${Env}-${suffix}'`));
+    assert.match(resources[name], /AlarmActions: \[!Ref AlertTopic\]/);
+  }
+  assert.match(resources.AuditTamperAlarm, /Namespace: !Sub 'HT2\/\$\{Env\}'\n      MetricName: AuditTamper/);
+  assert.match(resources.AuditArchiveLagAlarm, /Namespace: AWS\/Lambda\n      MetricName: IteratorAge/);
+  assert.match(resources.AuditArchiveLagAlarm, /Threshold: 900000\n      ComparisonOperator: GreaterThanThreshold/);
+  assert.match(resources.AuditArchiveErrorsAlarm, /MetricName: Errors/);
+});
+
+test('第9段階 4.7 AddressHmacSecretと独立したKMS HMAC鍵、最小権限、保持を定義する', () => {
+  assert.match(resources.AddressHmacSecret, /Name: !Sub '\/ht2\/\$\{Env\}\/address-hmac'/);
+  assert.match(resources.AddressHmacSecret, /SecretStringTemplate: '\{"kid":"k1"\}'/);
+  assert.match(resources.AddressHmacSecret, /GenerateStringKey: key\n        PasswordLength: 64\n        ExcludePunctuation: true/);
+  for (const requirement of ['KeySpec: HMAC_256', 'KeyUsage: GENERATE_VERIFY_MAC', 'PendingWindowInDays: 30', 'DeletionPolicy: Retain\n    UpdateReplacePolicy: Retain', "Action: 'kms:*'", 'iam::${AWS::AccountId}:root']) assert.ok(resources.EraseMacKey.includes(requirement));
+  assert.match(resources.ApiPolicy, /Action: \['kms:GenerateMac'\]\n\s+Resource: !GetAtt EraseMacKey.Arn/);
+  assert.match(resources.WorkerPolicy, /Action: \['kms:GenerateMac', 'kms:DescribeKey'\]\n\s+Resource: !GetAtt EraseMacKey.Arn/);
+  assert.doesNotMatch(resources.ApiPolicy + resources.WorkerPolicy, /kms:(?:Sign|Decrypt|ScheduleKeyDeletion|DisableKey)|BypassGovernanceRetention/);
+  assert.match(resources.WorkerPolicy, /Action: \['dynamodb:DeleteItem'\][\s\S]*?dynamodb:LeadingKeys': \[CONTACT_META\]/);
+  assert.doesNotMatch(main, /EraseSecret|erase-hmac|ERASE_SECRET_ARN/);
+});
+
+test('第9段階 15.5 全LambdaでFunctionUpdateを既定とし、ARN指定時だけManualに固定する', () => {
+  assert.match(blocks(main, 'Parameters').RuntimeVersionArn, /Default: ''/);
+  assert.match(main, /HasRuntimeVersion: !Not \[!Equals \[!Ref RuntimeVersionArn, ''\]\]/);
+  const functions = Object.values(resources).filter((resource) => resource.includes('Type: AWS::Lambda::Function\n'));
+  assert.equal(functions.length, 3);
+  for (const fn of functions) assert.match(fn, /RuntimeManagementConfig: !If\n        - HasRuntimeVersion\n        - \{UpdateRuntimeOn: Manual, RuntimeVersionArn: !Ref RuntimeVersionArn\}\n        - \{UpdateRuntimeOn: FunctionUpdate\}/);
+});
+
 test('12.1 主スタックとエッジに全必須リソースがある', () => {
   const expected = {
     WebBucket: 'S3::Bucket', DataBucket: 'S3::Bucket', EventLogBucket: 'S3::Bucket', Distribution: 'CloudFront::Distribution',
@@ -27,7 +88,7 @@ test('12.1 主スタックとエッジに全必須リソースがある', () => 
     ConfigurationSet: 'SES::ConfigurationSet', ContactList: 'SES::ContactList', EventStream: 'KinesisFirehose::DeliveryStream',
     EventsDatabase: 'Glue::Database', EventsTable: 'Glue::Table', AthenaWorkGroup: 'Athena::WorkGroup',
     ScheduleGroup: 'Scheduler::ScheduleGroup', DailySchedule: 'Scheduler::Schedule',
-    OriginSecret: 'SecretsManager::Secret', EraseSecret: 'SecretsManager::Secret', AlertTopic: 'SNS::Topic', AppRecord: 'Route53::RecordSet',
+    OriginSecret: 'SecretsManager::Secret', AddressHmacSecret: 'SecretsManager::Secret', AlertTopic: 'SNS::Topic', AppRecord: 'Route53::RecordSet',
   };
   for (const [name, type] of Object.entries(expected)) assert.ok(resources[name]?.includes(`Type: AWS::${type}\n`), name);
   const e = blocks(edge);
@@ -148,17 +209,19 @@ function allowed(policy) {
   return new Set([...policy.matchAll(/- Effect: Allow\n(?:\s+#[^\n]*\n)*\s+Action: \[([^\]]+)\]/g)].flatMap((m) => [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])));
 }
 const apiOperations = {
+  kms: 'GenerateMac',
   ses: 'GetAccount GetEmailIdentity GetConfigurationSet GetConfigurationSetEventDestinations GetContactList ListContacts GetContact CreateContact UpdateContact DeleteContact GetSuppressedDestination GetImportJob CreateEmailTemplate GetEmailTemplate TestRenderEmailTemplate SendEmail',
   ddb: 'GetItem PutItem UpdateItem Query TransactWriteItems', s3: 'PutObject GetObject HeadObject',
   sfn: 'StartExecution DescribeExecution SendTaskSuccess SendTaskFailure', scheduler: 'CreateSchedule DeleteSchedule GetSchedule',
   cognito: 'AdminGetUser AdminListGroupsForUser', cloudwatch: 'GetMetricData DescribeAlarms', ssm: 'GetParameter', secrets: 'GetSecretValue', lambda: 'Invoke',
 };
 const workerOperations = {
+  kms: 'GenerateMac DescribeKey',
   sfn: 'DescribeExecution', scheduler: 'GetSchedule',
   ses: 'GetAccount GetEmailIdentity GetConfigurationSet GetConfigurationSetEventDestinations GetContactList ListContacts GetContact DeleteContact SendEmail CreateImportJob GetImportJob DeleteEmailTemplate',
-  ddb: 'GetItem PutItem UpdateItem Query BatchGetItem', s3: 'PutObject GetObject HeadObject', cloudwatch: 'GetMetricData DescribeAlarms', sns: 'Publish', ssm: 'GetParameter', secrets: 'GetSecretValue',
+  ddb: 'GetItem PutItem UpdateItem DeleteItem Query BatchGetItem', s3: 'PutObject GetObject HeadObject', cloudwatch: 'GetMetricData DescribeAlarms', sns: 'Publish', ssm: 'GetParameter', secrets: 'GetSecretValue',
 };
-const prefixes = {ses:'ses',ddb:'dynamodb',s3:'s3',sfn:'states',scheduler:'scheduler',cognito:'cognito-idp',cloudwatch:'cloudwatch',sns:'sns',ssm:'ssm',secrets:'secretsmanager',lambda:'lambda'};
+const prefixes = {kms:'kms',ses:'ses',ddb:'dynamodb',s3:'s3',sfn:'states',scheduler:'scheduler',cognito:'cognito-idp',cloudwatch:'cloudwatch',sns:'sns',ssm:'ssm',secrets:'secretsmanager',lambda:'lambda'};
 const iamOperation = (service, operation) => service === 's3' && operation === 'HeadObject' ? 'GetObject' : service === 'lambda' && operation === 'Invoke' ? 'InvokeFunction' : service === 'ddb' && operation === 'TransactWriteItems' ? 'PutItem' : operation;
 
 for (const [name, operations] of [['Api',apiOperations],['Worker',workerOperations]]) {
@@ -212,8 +275,9 @@ test('12.6 引継ぎの限定S3読取・PassRole・通知と環境変数を実�
   assert.match(resources.WorkerPolicy, /sns:Publish/);
   const sources = readdirSync(new URL('../../src/', import.meta.url), {recursive:true}).filter((n) => n.endsWith('.js')).map((n) => read(`src/${n.replaceAll('\\','/')}`)).join('\n');
   const envs = new Set([...sources.matchAll(/environment\.([A-Z][A-Z_]+)/g)].map((m) => m[1]));
-  for (const name of ['CONFIG_PARAM','ORIGIN_SECRET_ARN','ERASE_SECRET_ARN','LOG_LEVEL']) envs.add(name);
+  for (const name of ['CONFIG_PARAM','ORIGIN_SECRET_ARN','ADDRESS_HMAC_SECRET_ARN','LOG_LEVEL']) envs.add(name);
   for (const fn of ['ApiFunction','WorkerFunction']) for (const name of envs) {
+    if (name === 'AUDIT_ARCHIVE_BUCKET' && fn === 'ApiFunction') continue;
     if (name !== 'AWS_REGION') assert.ok(resources[fn].includes(`          ${name}:`), `${fn}.${name}`);
   }
   for (const fn of ['ApiFunction','WorkerFunction']) {
@@ -234,11 +298,11 @@ test('12.7 初期設定は送信無効、SSMの全設定キーを実装の検証
     assert.equal(settings.sending_enabled,false);
     assert.equal(settings.delivery_check_required,env === 'prod');
   }
-  assert.match(resources.EraseSecret, /DeletionPolicy: Retain/);
+  assert.match(resources.AddressHmacSecret, /DeletionPolicy: Retain/);
   assert.equal(blocks(main, 'Parameters').EraseHmacKey, undefined);
   assert.equal(resources.ConfigParameter, undefined);
-  assert.match(resources.EraseSecret, /GenerateStringKey: key\n        PasswordLength: 64\n        ExcludePunctuation: true/);
-  assert.doesNotMatch(resources.EraseSecret, /\n      SecretString:/);
+  assert.match(resources.AddressHmacSecret, /GenerateStringKey: key\n        PasswordLength: 64\n        ExcludePunctuation: true/);
+  assert.doesNotMatch(resources.AddressHmacSecret, /\n      SecretString:/);
   assert.match(outputs.ConfigParameterName, /!Sub '\/ht2\/\$\{Env\}\/config'/);
 });
 
@@ -307,6 +371,59 @@ function preserveWebConfig(t) {
     else rmSync(path, { force: true });
   });
 }
+
+for (const state of ['QUEUED', 'SENDING', 'SCHEDULED']) test(`T-68 deployは${state}の配信IDを出し、変更セット作成前に止まる`, () => {
+  const epoch = 1793664000;
+  const scheduled = new Date((epoch + 3600) * 1000).toISOString();
+  const id = '01K9542S00AAAAAAAAAAAAAAAA';
+  const r = runScript('deploy.sh', ['dev', 'prepare', 'example-review'], { MOCK_EPOCH: String(epoch), MOCK_CAMPAIGNS: `${id}\t${state}\t${state === 'SCHEDULED' ? scheduled : 'None'}\n` });
+  assert.notEqual(r.status, 0); assert.match(r.stderr, new RegExp(`DEPLOY_BLOCKED ${id} ${state}`));
+  assert.doesNotMatch(r.calls, /cloudformation (?:package|create-change-set)/);
+  assert.match(r.calls, /dynamodb query .*--consistent-read/);
+});
+
+test('T-68 deployは60分より先の予約を許可し、取得不能・日時不明は拒否する', () => {
+  const epoch = 1793664000; const id = '01K9542S00AAAAAAAAAAAAAAAA';
+  const allowed = runScript('deploy.sh', ['dev', 'prepare', 'example-review'], { MOCK_EPOCH: String(epoch), MOCK_CAMPAIGNS: `${id}\tSCHEDULED\t${new Date((epoch + 3601) * 1000).toISOString()}\n` });
+  assert.equal(allowed.status, 0, allowed.stderr); assert.match(allowed.calls, /create-change-set/);
+  for (const env of [{ MOCK_CAMPAIGN_ERROR: '1' }, { MOCK_CAMPAIGNS: `${id}\tSCHEDULED\tNone\n` }]) {
+    const r = runScript('deploy.sh', ['dev', 'prepare', 'example-review'], env);
+    assert.notEqual(r.status, 0); assert.match(r.stderr, /DEPLOY_BLOCKED/); assert.doesNotMatch(r.calls, /create-change-set/);
+  }
+});
+
+for (const state of ['PAUSED', 'NEEDS_REVIEW']) test(`T-68 deployは${state}を一覧表示し、明示的な確認文字列で続行する`, () => {
+  const id = '01K9542S00AAAAAAAAAAAAAAAA'; const env = { MOCK_CAMPAIGNS: `${id}\t${state}\tNone\n` };
+  const stopped = runScript('deploy.sh', ['dev', 'prepare', 'example-review'], env, 'yes\n');
+  assert.notEqual(stopped.status, 0); assert.doesNotMatch(stopped.calls, /create-change-set/);
+  const confirmed = runScript('deploy.sh', ['dev', 'prepare', 'example-review'], env, 'deploy ht2-main-dev stopped\n');
+  assert.equal(confirmed.status, 0, confirmed.stderr); assert.match(confirmed.stderr, new RegExp(`${id} ${state}`)); assert.match(confirmed.calls, /create-change-set/);
+});
+
+test('T-68 初回スタック作成は配信点検を省き、executeでも配信を再点検する', () => {
+  const first = runScript('deploy.sh', ['dev', 'prepare', 'example-review'], { MOCK_STATUS: 'None', MOCK_CAMPAIGN_ERROR: '1' });
+  assert.equal(first.status, 0, first.stderr); assert.doesNotMatch(first.calls, /dynamodb query/);
+  const execute = runScript('deploy.sh', ['dev', 'execute', 'example-review'], { MOCK_CAMPAIGNS: '01K9542S00AAAAAAAAAAAAAAAA\tSENDING\tNone\n' }, 'execute ht2-main-dev example-review\n');
+  assert.notEqual(execute.status, 0); assert.doesNotMatch(execute.calls, /execute-change-set/);
+});
+
+test('15.5 smokeは全関数の実行環境ARNとSDK版を保存し、前回との差を表示する', () => {
+  const previous = new URL('build/dev.sdk-check.json', root);
+  const sdk = { ok: true, packages: [{ package: '@aws-sdk/client-kms', ok: true, version: '3.1.0' }] };
+  const r = runScript('smoke.sh', ['dev'], { MOCK_SDK_RESULT: JSON.stringify(sdk), MOCK_RUNTIME_ARN: 'arn:aws:lambda:ap-northeast-1::runtime:123abc' });
+  assert.equal(r.status, 0, r.stderr);
+  const saved = JSON.parse(readFileSync(previous, 'utf8'));
+  assert.deepEqual(Object.keys(saved.runtime_versions).sort(), ['ht2-dev-api', 'ht2-dev-audit', 'ht2-dev-worker']);
+  assert.deepEqual(saved.sdk_check, sdk);
+  assert.equal((r.calls.match(/lambda get-function-configuration/g) ?? []).length, 3);
+  const same = runScript('smoke.sh', ['dev'], { MOCK_SDK_RESULT: JSON.stringify(sdk), MOCK_RUNTIME_ARN: 'arn:aws:lambda:ap-northeast-1::runtime:123abc' });
+  assert.equal(same.status, 0, same.stderr); assert.doesNotMatch(same.stdout, /versions changed/);
+  const changed = runScript('smoke.sh', ['dev'], { MOCK_SDK_RESULT: JSON.stringify({ ...sdk, packages: [{ ...sdk.packages[0], version: '3.2.0' }] }), MOCK_RUNTIME_ARN: 'arn:aws:lambda:ap-northeast-1::runtime:abcdef' });
+  assert.equal(changed.status, 0, changed.stderr); assert.match(changed.stdout, /Runtime\/SDK versions changed/); assert.match(changed.stdout, /3.1.0/); assert.match(changed.stdout, /3.2.0/);
+  const before = readFileSync(previous, 'utf8');
+  const failed = runScript('smoke.sh', ['dev'], { MOCK_RUNTIME_ARN: 'None' });
+  assert.notEqual(failed.status, 0); assert.equal(readFileSync(previous, 'utf8'), before);
+});
 
 test('15.3 全スクリプトはstrict bashで、AWS CLI以外の実行環境・外部パッケージ不要', () => {
   for (const name of scripts) {
@@ -426,10 +543,11 @@ test('13.2 カスタムアラームの名前空間とメトリクス名を出力
 });
 
 test('4.3・12.7 保持資源は初回作成失敗だけ削除し、更新置換では保持', () => {
-  for (const name of ['WebBucket', 'DataBucket', 'EventLogBucket', 'Table', 'ContactList', 'UserPool', 'OriginSecret', 'EraseSecret']) {
+  for (const name of ['WebBucket', 'DataBucket', 'EventLogBucket', 'Table', 'ContactList', 'UserPool', 'OriginSecret', 'AddressHmacSecret']) {
     assert.match(resources[name], /DeletionPolicy: RetainExceptOnCreate\n    UpdateReplacePolicy: Retain/);
   }
-  assert.doesNotMatch(main, /DeletionPolicy: Retain\n|AWS::SSM::Parameter/);
+  for (const [name, resource] of Object.entries(resources)) if (!['AuditArchiveBucket', 'EraseMacKey'].includes(name)) assert.doesNotMatch(resource, /DeletionPolicy: Retain\n/);
+  assert.doesNotMatch(main, /AWS::SSM::Parameter/);
 });
 
 test('12.6 ListBucketはDataBucketだけに許可し、GetObjectの不存在判定にprefix条件を使わない', () => {

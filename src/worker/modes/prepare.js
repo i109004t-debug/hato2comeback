@@ -3,12 +3,16 @@ import { normalizeEmail } from '../../common/email.js';
 import { change, output, currentAction, readChunk, boundedWait, workflowStep } from '../state.js';
 import { addressHash } from '../../common/log.js';
 import { applyContactMetadata } from '../../common/contact-metadata.js';
+import { isErased } from '../../common/erase.js';
+
+import { reviewUnsupportedSchema } from '../../common/schema.js';
 
 export async function prepare(event, runtime) {
   const { campaign_id: id, execution_arn: executionArn } = event;
   const resume = event.resume === true || event.input?.resume === true;
   const started = runtime.now();
   let campaign = await runtime.store.get('CAMPAIGN', id);
+  if (await reviewUnsupportedSchema(runtime, campaign)) return output('REVIEW', { reason: 'UNSUPPORTED_SCHEMA' });
   if (campaign?.status === 'CANCELLED') return output('CANCELLED');
   if (!campaign || !['QUEUED', 'SCHEDULED'].includes(campaign.status)) return output('REVIEW', { reason: 'UNEXPECTED_STATUS' });
   if (campaign.execution_arn && campaign.execution_arn !== executionArn && !resume) return output('CANCELLED');
@@ -45,16 +49,14 @@ export async function prepare(event, runtime) {
     progress = campaign.progress; counts = campaign.counts;
   } else {
     const metadata = new Map();
-    const erased = new Set();
-    for (const PK of ['CONTACT_META', 'ERASED']) {
+    for (const PK of ['CONTACT_META']) {
       for await (const page of runtime.store.queryPages({ KeyConditionExpression: 'PK = :pk', ExpressionAttributeValues: { ':pk': { S: PK } }, ConsistentRead: true })) {
         for (const item of page.items) {
-          if (PK === 'ERASED') erased.add(item.SK);
-          else metadata.set(item.SK, { erased: item.erased, blocked_all: item.blocked_all, blocked_topics: item.blocked_topics });
+          metadata.set(item.SK, { erased: item.erased, blocked_all: item.blocked_all, blocked_topics: item.blocked_topics });
         }
       }
     }
-    const secret = await runtime.secrets.get('erase-hmac');
+    const secret = await runtime.secrets.get('address-hmac');
     const recipients = [];
     const seenAddresses = new Set();
     const seenTokens = new Set();
@@ -69,7 +71,7 @@ export async function prepare(event, runtime) {
       if (!Array.isArray(page.Contacts)) throw new Error('Invalid contacts response');
       for (const original of page.Contacts) {
         const hash = addressHash(normalizeEmail(original.EmailAddress).email, secret.key);
-        if (erased.has(hash)) continue;
+        if (await isErased(runtime, original.EmailAddress)) continue;
         const contact = applyContactMetadata(original, metadata.get(hash));
         if (contact.UnsubscribeAll === true) continue;
         if (contact.TopicPreferences?.some((preference) => preference.TopicName === campaign.topic && preference.SubscriptionStatus !== 'OPT_IN')) continue;

@@ -2,7 +2,7 @@ import { createDdb, marshall, key } from './ddb.js';
 import { createTime, jstDate, nextJstDayAt0005, unixSeconds } from './time.js';
 import { normalizeEmail } from './email.js';
 import { pauseReason } from './precheck.js';
-import { contactBlocked } from './contact-metadata.js';
+import { contactMetadataKey, contactBlocked } from './contact-metadata.js';
 
 export function classifySendError(error) {
   const status = error.$metadata?.httpStatusCode;
@@ -44,10 +44,12 @@ export function createSender(deps) {
   const pause = (code) => ({ type: 'PAUSE', reason: pauseReason(code), code });
   const guard = async (context, limiter) => {
     if (context.remainingTime && context.remainingTime() < 15000) return { type: 'YIELD' };
+    const configReadAt = now();
     const currentConfig = await config.get();
     const campaign = context.test ? undefined : await store.get('CAMPAIGN', context.campaignId);
     if (!context.test) {
       if (!campaign || campaign.execution_arn !== context.executionArn) return pause('EXECUTION_CHANGED');
+      if (campaign.schema_version !== 1) return { type: 'CONFIG_ERROR', code: 'UNSUPPORTED_SCHEMA' };
       if (campaign.status !== 'SENDING') return pause(campaign.status === 'PAUSED' ? campaign.pause_reason : 'STATE_CHANGED');
       if (campaign.review) return { type: 'CONFIG_ERROR', code: 'UNRESOLVED_REVIEW' };
       if (!Number.isFinite(Date.parse(campaign.started_at)) || Date.parse(campaign.started_at) > now()) return { type: 'CONFIG_ERROR', code: 'INVALID_START' };
@@ -70,7 +72,7 @@ export function createSender(deps) {
     if (!Number.isFinite(interval) || interval <= 0) return pause('CONFIGURATION_INVALID');
     limiter.interval = interval;
     if (Number.isFinite(limiter.lastStart)) limiter.next = Math.max(limiter.next, limiter.lastStart + interval);
-    return { config: currentConfig, campaign, held };
+    return { config: currentConfig, campaign, held, checkedAt: configReadAt };
   };
   const reserve = async (cap) => {
     for (;;) {
@@ -114,6 +116,8 @@ export function createSender(deps) {
       const final = await guard(context, limiter);
       if (final.type) return final;
       if (await contactBlocked({ ...deps, store }, context.address, context.topic)) return { type: 'SKIPPED', code: 'CONTACT_BLOCKED' };
+      // 設定取得から5秒以上かかった場合は、許可を使い回さず検査をやり直す。
+      if (now() >= (config.validUntil?.() ?? final.checkedAt + 5000)) continue;
       // 連絡先の読取が遅れても、送信開始時点のロック余裕と健康検査の期限を守る。
       if (!(final.held.expires_at_ms > now() + 10000)) return pause('LOCK_LOST');
       if (now() - health.checkedAt >= Math.min(60, final.config.health_check_seconds) * 1000) continue;
@@ -143,6 +147,8 @@ export function createSender(deps) {
         }
         if (contact.UnsubscribeAll || !contact.TopicPreferences?.some((entry) => entry.TopicName === input.ListManagementOptions?.TopicName && entry.SubscriptionStatus === 'OPT_IN')) return { type: 'CONFIG_ERROR', code: 'TEST_RECIPIENT_NOT_REGISTERED' };
       }
+      const rid = await contactMetadataKey(deps, context.address);
+      input = { ...input, EmailTags: [...(input.EmailTags ?? []).filter((tag) => tag.Name !== 'rid'), { Name: 'rid', Value: rid }] };
       for (let attempt = 0; ; attempt += 1) {
         const stopped = await beforeAttempt(context, limiter);
         if (stopped.type) return stopped;

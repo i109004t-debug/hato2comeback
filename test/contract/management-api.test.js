@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { managementFixture } from '../helpers/management.js';
-import { ID, failure } from '../helpers/sending.js';
+import { ID, failure, eraseHash } from '../helpers/sending.js';
 import { API_ROUTES } from '../../src/common/router.js';
 import { DELIVERY_CASES } from '../../src/common/precheck.js';
 import { addressHash } from '../../src/common/log.js';
@@ -263,13 +263,13 @@ test('T-47 全停止は名前を消し、再同意だけが全停止を解除し
   assert.equal((await f.request('POST /contacts/reconsent', body)).statusCode, 200);
   assert.equal(f.contacts[0].UnsubscribeAll, false); assert.equal(f.contacts[0].TopicPreferences.find((item) => item.TopicName === 'event').SubscriptionStatus, 'OPT_OUT');
   assert.equal(JSON.parse(f.contacts[0].AttributesData).reconsent.by, 'user');
-  assert.ok(audits(f).some((item) => item.action === 'RECONSENT' && item.addr8));
+  assert.ok(audits(f).some((item) => item.action === 'RECONSENT' && item.addr_id));
 });
 
 test('T-17 完全削除はHMACを保持し、Gmail別表記でも再登録を拒否', async () => {
   const f = managementFixture({ env: 'prod' });
   assert.equal((await f.request('POST /contacts/erase', { email: 'T.a+fc@googlemail.com', note: '本人からの削除請求' })).statusCode, 200);
-  const hash = addressHash('ta@gmail.com', '7'.repeat(64));
+  const hash = eraseHash('ta@gmail.com');
   assert.ok(f.ddb.get('ERASED', hash));
   expectCode(await f.request('POST /contacts', { ...newContact, email: 't.a@gmail.com' }), 409, 'ERASED_ADDRESS');
   assert.equal(f.changes.filter((change) => change.EmailAddress === 'ta@gmail.com').length, 1);
@@ -290,7 +290,7 @@ test('API-06 新規宛先は正規化・同意属性を保管し、監査にア�
   const attrs = JSON.parse(input.AttributesData);
   assert.equal(attrs.orig, 'T.a+fc@googlemail.com'); assert.equal(attrs.origin, 'manual:user'); assert.deepEqual(attrs.consent, consent);
   const audit = audits(f).find((item) => item.action === 'CONTACT_CREATE');
-  assert.ok(audit.addr8); assert.equal(audit.details.attributes.name, '会員名'); assert.ok(!JSON.stringify(audit).includes('@'));
+  assert.ok(audit.addr_id); assert.equal(audit.details.attributes.name, '会員名'); assert.ok(!JSON.stringify(audit).includes('@'));
 });
 
 test('5.5 再同意の古い証跡を拒否し、全停止解除は指定外の以前の購読を復活させない', async () => {
@@ -358,8 +358,8 @@ test('9.3 閲覧者には一覧・詳細・結果のアドレスとorigを返さ
   const one = await f.request('POST /contacts/get', { email: f.addresses[0] });
   assert.match(one.json.EmailAddress, /\*\*\*/); assert.equal(one.json.AttributesData, undefined);
   f.setCampaign({ result_keys: [`results/${ID}/00000-000.jsonl`], task_token: 'private-task' });
-  f.files.set(`results/${ID}/00000-000.jsonl`, JSON.stringify({ e: f.addresses[0], r: 'UNKNOWN', c: 'TimeoutError', t: '2026-11-03T10:00:00Z' }) + '\n');
-  assert.match((await f.request(`GET ${f.campaignPath}/failures`)).json.items[0].e, /\*\*\*/);
+  f.files.set(`results/${ID}/00000-000.jsonl`, JSON.stringify({ a: addressHash(f.addresses[0], '7'.repeat(64)), m: 'm***0@example.com', ci: 0, ix: 0, r: 'UNKNOWN', c: 'TimeoutError', t: '2026-11-03T10:00:00Z' }) + '\n');
+  assert.match((await f.request(`GET ${f.campaignPath}/failures`)).json.items[0].m, /\*\*\*/);
   assert.equal((await f.request(`GET ${f.campaignPath}`)).json.task_token, undefined);
   assert.equal((await f.request('GET /campaigns')).json.items[0].task_token, undefined);
 });

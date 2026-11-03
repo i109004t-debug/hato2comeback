@@ -1,10 +1,11 @@
 import { AppError, invalid } from '../../common/http.js';
-import { normalizeEmail, maskEmail } from '../../common/email.js';
+import { maskEmail } from '../../common/email.js';
 import { requiresEmailMask } from '../../common/authz.js';
 import { decodeSesCursor, encodeSesCursor } from '../../common/ddb.js';
 import { addressHash } from '../../common/log.js';
 import { timestamp, updateRecord } from '../../common/records.js';
 import { contactAttributes, getContactMetadata, ensureContactMetadata, applyContactMetadata, eraseContactMetadata } from '../../common/contact-metadata.js';
+import { isErased, eraseMatch } from '../../common/erase.js';
 
 export const attributes = contactAttributes;
 
@@ -69,15 +70,15 @@ async function create({ runtime, user, body, audit, requestId }) {
   let uncertain = false;
   try {
     const hash = addressHash(body.email, runtime.hmacKey);
-    if (await runtime.store.get('ERASED', hash)) throw new AppError('ERASED_ADDRESS', 409, '完全削除された宛先です。');
+    if (await isErased(runtime, body.email)) throw new AppError('ERASED_ADDRESS', 409, '完全削除された宛先です。');
     try {
       await runtime.ses.getContact({ ContactListName: runtime.contactList, EmailAddress: body.email });
       throw new AppError('CONTACT_EXISTS', 409, '連絡先は既に登録されています。');
     } catch (error) { if (error.name !== 'NotFoundException') throw error; }
     if (await getContactMetadata(runtime, body.email)) throw new AppError('CONTACT_EXISTS', 409, '連絡先の保存済み記録があります。管理者が状態を確認してください。');
-    const attrs = { v: 1, ...(body.name ? { name: body.name } : {}), consent: body.consent, origin: `manual:${user.sub}`, ...(body.orig ? { orig: body.orig } : {}) };
-    const input = { ContactListName: runtime.contactList, EmailAddress: body.email, UnsubscribeAll: false, TopicPreferences: body.topics.map((TopicName) => ({ TopicName, SubscriptionStatus: 'OPT_IN' })), AttributesData: serialize(attrs) };
-    const pending = await updateRecord(runtime, 'CONTACT_META', hash, undefined, { attributes: {}, pending_attributes: attrs, registration_state: 'PENDING', blocked_all: true, blocked_topics: [] });
+    const attrs = { v: 1, ...(body.name ? { name: body.name } : {}), consent: body.consent, origin: `manual:${user.sub}` };
+    const input = { ContactListName: runtime.contactList, EmailAddress: body.email, UnsubscribeAll: false, TopicPreferences: body.topics.map((TopicName) => ({ TopicName, SubscriptionStatus: 'OPT_IN' })), AttributesData: serialize({ ...attrs, ...(body.orig ? { orig: body.orig } : {}) }) };
+    const pending = await updateRecord(runtime, 'CONTACT_META', hash, undefined, { kid: runtime.addressSecret.kid, attributes: {}, pending_attributes: attrs, registration_state: 'PENDING', blocked_all: true, blocked_topics: [] });
     uncertain = true;
     try { await runtime.ses.createContact(input); } catch (error) {
       if (error.name === 'AlreadyExistsException') {
@@ -115,7 +116,7 @@ async function change(ctx) {
     if (body.scope === 'ALL') { all = true; blockedAll = true; delete attrs.name; }
     else { preferences.set(body.scope, 'OPT_OUT'); blocked.add(body.scope); }
   } else if (route.operation === 'contacts.reconsent') {
-    if (await runtime.store.get('ERASED', addressHash(body.email, runtime.hmacKey))) throw new AppError('ERASED_ADDRESS', 409, '完全削除された宛先です。');
+    if (await isErased(runtime, body.email)) throw new AppError('ERASED_ADDRESS', 409, '完全削除された宛先です。');
     const prior = Math.max(Date.parse(attrs.consent?.at) || 0, Date.parse(attrs.reconsent?.at) || 0);
     if (Date.parse(body.reconsent.at) <= prior) throw invalid('reconsent.at', 'NEW_CONSENT_REQUIRED');
     // SESには条件付き更新がない。明示的に再同意されたトピック以外は必ず停止する。
@@ -150,14 +151,14 @@ async function erase({ runtime, body, audit, requestId }) {
   await runtime.contactLock.acquire(owner);
   try {
     // 先にHMACを記録する。SES削除の結果が不明でも再登録を許可しない。
-    const hash = addressHash(normalizeEmail(body.email).email, runtime.hmacKey);
+    const hash = await eraseMatch(runtime, body.email);
     const existing = await runtime.store.get('ERASED', hash);
     if (!existing) {
       try { await runtime.store.put({ PK: 'ERASED', SK: hash, erased_at: timestamp(runtime) }); } catch (error) { if (error.name !== 'ConditionalCheckFailedException') throw error; }
     }
     await eraseContactMetadata(runtime, body.email);
     try { await runtime.ses.deleteContact({ ContactListName: runtime.contactList, EmailAddress: body.email }); } catch (error) { if (error.name !== 'NotFoundException') throw error; }
-    await audit('ERASE', 'contact', { note: body.note }, body.email);
+    await audit('ERASE', 'contact', { note: body.note, erase_mac: hash }, body.email);
     return { erased: true };
   } finally { await runtime.contactLock.change(owner, {}, true); }
 }

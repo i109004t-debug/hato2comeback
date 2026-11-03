@@ -2,17 +2,26 @@ import { AppError } from './http.js';
 import { addressHash } from './log.js';
 import { normalizeEmail } from './email.js';
 import { updateRecord, conflict } from './records.js';
+import { isErased } from './erase.js';
+import { validateConsent } from './validate.js';
 
 export function contactAttributes(contact) {
   const value = JSON.parse(contact.AttributesData || '{}');
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid contact attributes');
   if (Buffer.byteLength(JSON.stringify(value)) > 1024) throw new Error('Contact attributes exceed backup limit');
+  delete value.orig;
+  if (value.consent) validateConsent(value.consent);
+  if (value.reconsent) validateConsent({ at: value.reconsent.at, source: value.reconsent.source });
   return value;
 }
 
+export async function contactIdentity(runtime, email) {
+  const secret = runtime.addressSecret ?? await (runtime.secrets ?? runtime.secretsProvider).get('address-hmac');
+  return { addr_id: addressHash(normalizeEmail(email).email, secret.key), kid: secret.kid };
+}
+
 export async function contactMetadataKey(runtime, email) {
-  const key = runtime.hmacKey ?? (await (runtime.secrets ?? runtime.secretsProvider).get('erase-hmac')).key;
-  return addressHash(normalizeEmail(email).email, key);
+  return (await contactIdentity(runtime, email)).addr_id;
 }
 
 export async function getContactMetadata(runtime, email) {
@@ -20,14 +29,15 @@ export async function getContactMetadata(runtime, email) {
 }
 
 export async function ensureContactMetadata(runtime, contact) {
-  const hash = await contactMetadataKey(runtime, contact.EmailAddress);
-  if (await runtime.store.get('ERASED', hash)) throw new AppError('ERASED_ADDRESS', 409, '完全削除された宛先です。');
+  const { addr_id: hash, kid } = await contactIdentity(runtime, contact.EmailAddress);
+  if (await isErased(runtime, contact.EmailAddress)) throw new AppError('ERASED_ADDRESS', 409, '完全削除された宛先です。');
   const current = await runtime.store.get('CONTACT_META', hash);
   if (current?.erased) throw new AppError('ERASED_ADDRESS', 409, '完全削除された宛先です。');
   if (current) return current;
+  if ((await runtime.store.get('LOCK', 'CONTACT_CREATE'))?.owner?.startsWith('rekey:')) throw new AppError('CONTACT_IMPORT_IN_PROGRESS', 409, '鍵の入れ替えを処理中です。');
   const attributes = contactAttributes(contact);
   try {
-    return await updateRecord(runtime, 'CONTACT_META', hash, undefined, { attributes, blocked_all: false, blocked_topics: [] });
+    return await updateRecord(runtime, 'CONTACT_META', hash, undefined, { kid, attributes, blocked_all: false, blocked_topics: [] });
   } catch (error) {
     if (!conflict(error)) throw error;
     const latest = await runtime.store.get('CONTACT_META', hash);
@@ -51,18 +61,18 @@ export function applyContactMetadata(contact, metadata) {
 // SESの購読停止に加えて、アプリ側の停止と完全削除を送信直前に確認する。
 export async function contactBlocked(runtime, email, topic) {
   const hash = await contactMetadataKey(runtime, email);
-  if (await runtime.store.get('ERASED', hash)) return true;
+  if (await isErased(runtime, email)) return true;
   const metadata = await runtime.store.get('CONTACT_META', hash);
   return metadata?.erased === true || metadata?.blocked_all === true || metadata?.blocked_topics?.includes(topic) === true;
 }
 
 export async function eraseContactMetadata(runtime, email) {
-  const hash = await contactMetadataKey(runtime, email);
+  const { addr_id: hash, kid } = await contactIdentity(runtime, email);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const current = await runtime.store.get('CONTACT_META', hash);
     if (current?.erased) return current;
     try {
-      return await updateRecord(runtime, 'CONTACT_META', hash, current, { erased: true, blocked_all: true, blocked_topics: [] }, current ? ['attributes', 'pending_attributes'] : []);
+      return await updateRecord(runtime, 'CONTACT_META', hash, current, { kid, erased: true, blocked_all: true, blocked_topics: [] }, current ? ['attributes', 'pending_attributes'] : []);
     } catch (error) { if (!conflict(error) || attempt === 4) throw error; }
   }
 }

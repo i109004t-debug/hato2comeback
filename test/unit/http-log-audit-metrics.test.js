@@ -99,7 +99,7 @@ test('13.1 addr8は正規化済みアドレスのHMAC先頭8文字', () => {
   assert.throws(() => addr8('a@example.com', ''));
 });
 
-test('4.3 監査キーはUTC月・ISO8601#ULID、1年TTL・addr8・条件付き作成', async () => {
+test('4.3 監査キーはUTC月・ISO8601#ULID、1年TTL・addr_id・条件付き作成', async () => {
   const time = Date.parse('2026-10-31T15:00:00Z');
   const deps = { now: () => time, id: () => '01JC7Q00000000000000000000', hmacKey: 'key' };
   const entry = { actor_sub: 'actor', action: 'CONTACT_CREATE', target: 'contact', result: 'OK', request_id: 'request', email: 'A.B+fc@googlemail.com', details: { attributes: { name: '会員', consent: { at: '2026-10-01T00:00:00Z', source: '入会フォーム' }, orig: 'A.B+fc@googlemail.com' } } };
@@ -107,7 +107,7 @@ test('4.3 監査キーはUTC月・ISO8601#ULID、1年TTL・addr8・条件付き�
   assert.equal(item.PK, 'AUDIT#202610');
   assert.equal(item.SK, '2026-10-31T15:00:00.000Z#01JC7Q00000000000000000000');
   assert.equal(item.expires_at, time / 1000 + 365 * 86400);
-  assert.equal(item.addr8, addr8('ab@gmail.com', 'key'));
+  assert.equal(item.addr_id, addressHash('ab@gmail.com', 'key'));
   assert.ok(!JSON.stringify(item).includes('@'));
   assert.equal(item.details.attributes.consent.source, '入会フォーム');
   let input;
@@ -120,7 +120,7 @@ test('4.3 監査キーはUTC月・ISO8601#ULID、1年TTL・addr8・条件付き�
 test('13.2 全アプリメトリクスをEMFで出力し、機密情報を次元に入れない', () => {
   const lines = [];
   const metrics = createMetrics({ env: 'prod', now: () => 1000, write: (line) => lines.push(line) });
-  assert.deepEqual(Object.keys(METRIC_UNITS).sort(), 'Accepted Failed Unknown Throttled Paused NeedsReview StartFailed PrepareRecipients PrepareSeconds SesBusy ImportRows ImportSkipped ImportRejected ApiError4xx ApiError5xx ApiLatencyMs SesSendingEnabled SesMax24HourSend SesSentLast24Hours SesMaxSendRate'.split(' ').sort());
+  assert.deepEqual(Object.keys(METRIC_UNITS).sort(), 'AuditTamper Accepted Failed Unknown Throttled Paused NeedsReview StartFailed PrepareRecipients PrepareSeconds SesBusy ImportRows ImportSkipped ImportRejected ApiError4xx ApiError5xx ApiLatencyMs SesSendingEnabled SesMax24HourSend SesSentLast24Hours SesMaxSendRate'.split(' ').sort());
   assert.equal(METRIC_UNITS.PrepareSeconds, 'Seconds');
   assert.equal(METRIC_UNITS.ApiLatencyMs, 'Milliseconds');
   for (const name of Object.keys(METRIC_UNITS)) {

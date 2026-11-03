@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHmac } from 'node:crypto';
 import { createDdb, marshall, unmarshall } from '../../src/common/ddb.js';
 import { configDefaults } from '../../src/common/config.js';
 import { sendingConfigHash, REQUIRED_EVENTS, DELIVERY_CASES } from '../../src/common/precheck.js';
@@ -8,6 +9,7 @@ import { createHandler } from '../../src/worker/handler.js';
 export const ID = '01K9542S00AAAAAAAAAAAAAAAA';
 export const ID2 = '01K9542S00BBBBBBBBBBBBBBBB';
 export const ARN = 'arn:aws:states:ap-northeast-1:123456789012:execution:ht2:test';
+export const eraseHash = (email) => createHmac('sha256', 'erase-test-key').update(email).digest('hex');
 export const failure = (name, status, message = name) => Object.assign(new Error(message), { name, ...(status ? { $metadata: { httpStatusCode: status } } : {}) });
 
 function expression(input, item) {
@@ -64,6 +66,13 @@ export function memoryDdb() {
       if (!expression(input, items.get(name(item)) ?? {})) throw failure('ConditionalCheckFailedException', 400);
       api.set(item); calls.push(structuredClone(input)); return {};
     },
+    async deleteItem(input) {
+      const key = unmarshall(input.Key);
+      assert.ok(input.ConditionExpression);
+      if (!expression(input, items.get(name(key)) ?? {})) throw failure('ConditionalCheckFailedException', 400);
+      items.delete(name(key)); calls.push(structuredClone(input));
+      return {};
+    },
     async updateItem(input) {
       await api.beforeUpdate?.(input);
       const key = unmarshall(input.Key);
@@ -94,7 +103,7 @@ export function memoryDdb() {
       const pk = input.ExpressionAttributeValues[':pk'].S;
       let rows = [...items.values()].filter((item) => item.PK === pk).sort((a, b) => a.SK.localeCompare(b.SK));
       if (input.ScanIndexForward === false) rows.reverse();
-      if (input.ExclusiveStartKey) { const start = unmarshall(input.ExclusiveStartKey); rows = rows.slice(rows.findIndex((row) => row.SK === start.SK) + 1); }
+      if (input.ExclusiveStartKey) { const start = unmarshall(input.ExclusiveStartKey); rows = rows.filter((row) => input.ScanIndexForward === false ? row.SK.localeCompare(start.SK) < 0 : row.SK.localeCompare(start.SK) > 0); }
       const page = rows.slice(0, input.Limit ?? rows.length);
       return { Items: page.map(marshall), ...(page.length < rows.length ? { LastEvaluatedKey: marshall({ PK: pk, SK: page.at(-1).SK }) } : {}) };
     },
@@ -108,9 +117,13 @@ export function memoryDdb() {
       return { Responses };
     },
     async transactWriteItems(input) {
-      const puts = input.TransactItems.map((item) => item.Put);
-      if (puts.some((put) => !expression(put, items.get(name(unmarshall(put.Item))) ?? {}))) throw failure('TransactionCanceledException', 400);
-      puts.forEach((put) => { api.set(unmarshall(put.Item)); calls.push(structuredClone(put)); });
+      const mutations = input.TransactItems.map((item) => item.Put ?? item.Delete);
+      if (mutations.some((mutation) => !expression(mutation, items.get(name(unmarshall(mutation.Item ?? mutation.Key))) ?? {}))) throw failure('TransactionCanceledException', 400);
+      for (const mutation of mutations) {
+        if (mutation.Item) api.set(unmarshall(mutation.Item));
+        else items.delete(name(unmarshall(mutation.Key)));
+        calls.push(structuredClone(mutation));
+      }
       return {};
     },
   };
@@ -137,7 +150,15 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
     ddb, config: { get: async () => structuredClone(settings) },
     metrics: { emit: (name, value, dimensions) => metrics.push({ name, value, dimensions }) },
     notify: async (code, id) => notices.push({ code, id }), logger: { error: (...args) => f.logs.push(args) },
-    secretsProvider: { get: async () => ({ key: '7'.repeat(64) }) },
+    secretsProvider: { get: async () => ({ kid: 'k1', key: '7'.repeat(64) }) },
+    eraseMacKeyId: 'erase-key',
+    kms: {
+      generateMac: async (input) => {
+        assert.equal(input.KeyId, 'erase-key'); assert.equal(input.MacAlgorithm, 'HMAC_SHA_256');
+        return { Mac: Buffer.from(eraseHash(Buffer.from(input.Message).toString('utf8')), 'hex') };
+      },
+      describeKey: async () => ({ KeyMetadata: { KeyState: 'Enabled' } }),
+    },
     s3: {
       putObject: async (input) => { await f.onPut?.(input); files.set(input.Key, input.Body); return {}; },
       getObject: async (input) => { if (!files.has(input.Key)) throw failure('NoSuchKey', 404); return { Body: files.get(input.Key) }; },
@@ -187,7 +208,7 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
   f.delivery = { status: 'PASS', passed_at: new Date(clock).toISOString(), by: 'admin', note: '承認上限はSSMの日次上限。観測不足を確認済み。', evidence_key: 'delivery-checks/check/evidence.json', cases: Object.fromEntries(DELIVERY_CASES.map((id) => [id, 'PASS'])), config_hash: f.configHash, dns_config_hash: f.auth.dns_config_hash };
   if (env === 'prod') { org.delivery_check = f.delivery; files.set(f.delivery.evidence_key, '{}'); }
   ddb.set(org); ddb.set(f.auth);
-  ddb.set({ PK: 'CAMPAIGN', SK: ID, campaign_id: ID, status: 'QUEUED', version: 0, topic: 'news', from: '=?UTF-8?B?5Lya5aCx?= <info@example.com>', reply_to: org.reply_to, template_name: `ht2-c-${ID}-1`, created_at: new Date(clock).toISOString() });
+  ddb.set({ schema_version: 1, PK: 'CAMPAIGN', SK: ID, campaign_id: ID, status: 'QUEUED', version: 0, topic: 'news', from: '=?UTF-8?B?5Lya5aCx?= <info@example.com>', reply_to: org.reply_to, template_name: `ht2-c-${ID}-1`, created_at: new Date(clock).toISOString() });
   f.store = createDdb(deps);
   f.handler = createHandler(deps);
   f.prepare = (extra) => f.handler(f.event('prepare', extra), f.context);

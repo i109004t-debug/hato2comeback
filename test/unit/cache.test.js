@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createConfig, configDefaults, validateConfig } from '../../src/common/config.js';
 import { createSecrets } from '../../src/common/secrets.js';
 
-test('12.7 SSM設定JSONを30秒キャッシュし、変更の反映・参照の分離・同時取得を保証', async () => {
+test('12.7 SSM設定JSONを5秒キャッシュし、変更の反映・参照の分離・同時取得を保証', async () => {
   let time = 0;
   let calls = 0;
   let enabled = true;
@@ -18,12 +18,12 @@ test('12.7 SSM設定JSONを30秒キャッシュし、変更の反映・参照の
   a.nonprod_allowlist.push('bad');
   b.reputation_alarms.length = 0;
   enabled = false;
-  time = 29999;
+  time = 4999;
   const cached = await config.get();
   assert.equal(cached.sending_enabled, true);
   assert.deepEqual(cached.nonprod_allowlist, []);
   assert.equal(cached.reputation_alarms.length, 2);
-  time = 30000;
+  time = 5000;
   assert.equal((await config.get()).sending_enabled, false);
   assert.equal(calls, 2);
 });
@@ -52,7 +52,7 @@ test('キャッシュ期限後の取得失敗・不正JSONに古い送信許可�
     return { Parameter: { Value: input } };
   } } });
   assert.equal((await config.get()).sending_enabled, true);
-  time = 30000;
+  time = 5000;
   input = new Error('ssm unavailable');
   await assert.rejects(config.get(), /ssm unavailable/);
   input = '{bad';
@@ -67,16 +67,16 @@ test('12.7 シークレットは名前ごとに5分キャッシュ・同時取�
   let current = 'current';
   const secrets = createSecrets({ env: 'prod', now: () => time, secrets: { getSecretValue: async (input) => {
     calls += 1;
-    return { SecretString: JSON.stringify(input.SecretId.endsWith('erase-hmac') ? { key: '1'.repeat(64) } : { current, previous: 'previous' }) };
+    return { SecretString: JSON.stringify(input.SecretId.endsWith('address-hmac') ? { kid: 'k1', key: '1'.repeat(64) } : { current, previous: 'previous' }) };
   } } });
   const [a, b] = await Promise.all([secrets.get('origin-verify'), secrets.get('origin-verify')]);
   assert.equal(calls, 1);
   a.current = 'mutated';
   assert.equal(b.current, 'current');
   current = 'next';
-  time = 299999;
+  time = 49999;
   assert.equal((await secrets.get('origin-verify')).current, 'current');
-  await secrets.get('erase-hmac');
+  await secrets.get('address-hmac');
   assert.equal(calls, 2);
   time = 300000;
   assert.equal((await secrets.get('origin-verify')).current, 'next');
@@ -99,17 +99,17 @@ test('シークレットの不正JSON・鍵長を拒否し、期限後の障害�
     await assert.rejects(secrets.get('origin-verify'), { code: 'CONFIGURATION_INVALID' });
   }
   text = '{"key":"short"}';
-  await assert.rejects(secrets.get('erase-hmac'), { code: 'CONFIGURATION_INVALID' });
+  await assert.rejects(secrets.get('address-hmac'), { code: 'CONFIGURATION_INVALID' });
   await assert.rejects(secrets.get('unknown'), TypeError);
 });
 
-test('12.7 erase-hmacは32文字以上のUTF-8文字列を復号せず保持する', async () => {
+test('12.7 address-hmacは32文字以上のUTF-8文字列を復号せず保持する', async () => {
   for (const key of ['x'.repeat(32), 'a'.repeat(64), '鍵'.repeat(32), 'A'.repeat(43) + '=']) {
-    const provider = createSecrets({ env: 'dev', secrets: { getSecretValue: async () => ({ SecretString: JSON.stringify({ key }) }) } });
-    assert.equal((await provider.get('erase-hmac')).key, key);
+    const provider = createSecrets({ env: 'dev', secrets: { getSecretValue: async () => ({ SecretString: JSON.stringify({ kid: 'k1', key }) }) } });
+    assert.equal((await provider.get('address-hmac')).key, key);
   }
   for (const key of ['', 'x'.repeat(31), '鍵'.repeat(31), null, 123]) {
-    const provider = createSecrets({ env: 'dev', secrets: { getSecretValue: async () => ({ SecretString: JSON.stringify({ key }) }) } });
-    await assert.rejects(provider.get('erase-hmac'), { code: 'CONFIGURATION_INVALID' });
+    const provider = createSecrets({ env: 'dev', secrets: { getSecretValue: async () => ({ SecretString: JSON.stringify({ kid: 'k1', key }) }) } });
+    await assert.rejects(provider.get('address-hmac'), { code: 'CONFIGURATION_INVALID' });
   }
 });

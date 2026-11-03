@@ -21,8 +21,9 @@ test('12.6 AWSアダプターはSDKを遅延読込し、許可するAPIだけを
   const adapters = createAwsAdapters({ region: 'ap-northeast-1', load, timeoutSignal: (ms) => ({ timeout: ms }) });
   assert.equal(loaded.length, 0);
   const expectedMethods = {
+    kms: 'generateMac describeKey',
     ses: 'getAccount getEmailIdentity getConfigurationSet getConfigurationSetEventDestinations getContactList listContacts getContact createContact updateContact deleteContact getSuppressedDestination createImportJob getImportJob createEmailTemplate getEmailTemplate testRenderEmailTemplate deleteEmailTemplate sendEmail',
-    ddb: 'getItem putItem updateItem query transactWriteItems batchGetItem',
+    ddb: 'getItem putItem updateItem deleteItem query transactWriteItems batchGetItem',
     s3: 'putObject getObject headObject',
     sfn: 'startExecution describeExecution sendTaskSuccess sendTaskFailure',
     scheduler: 'createSchedule deleteSchedule getSchedule',
@@ -35,7 +36,7 @@ test('12.6 AWSアダプターはSDKを遅延読込し、許可するAPIだけを
   for (const [service, definition] of Object.entries(AWS_APIS)) {
     for (const operation of definition.operations) {
       const method = operation[0].toLowerCase() + operation.slice(1);
-      const input = service === 'ddb' && ['PutItem', 'UpdateItem'].includes(operation) ? { ConditionExpression: 'attribute_not_exists(PK)' } : {};
+      const input = service === 'ddb' && ['PutItem', 'UpdateItem', 'DeleteItem'].includes(operation) ? { ConditionExpression: 'attribute_not_exists(PK)' } : {};
       assert.deepEqual(await adapters[service][method](input), { ok: true });
       assert.equal(sent.at(-1).command.operation, operation);
       assert.equal(sent.at(-1).command.input, input);

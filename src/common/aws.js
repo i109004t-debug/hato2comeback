@@ -1,6 +1,9 @@
+import { readFile } from 'node:fs/promises';
+
 export const AWS_APIS = Object.freeze({
+  kms: { package: 'kms', client: 'KMSClient', operations: ['GenerateMac', 'DescribeKey'] },
   ses: { package: 'sesv2', client: 'SESv2Client', operations: ['GetAccount', 'GetEmailIdentity', 'GetConfigurationSet', 'GetConfigurationSetEventDestinations', 'GetContactList', 'ListContacts', 'GetContact', 'CreateContact', 'UpdateContact', 'DeleteContact', 'GetSuppressedDestination', 'CreateImportJob', 'GetImportJob', 'CreateEmailTemplate', 'GetEmailTemplate', 'TestRenderEmailTemplate', 'DeleteEmailTemplate', 'SendEmail'] },
-  ddb: { package: 'dynamodb', client: 'DynamoDBClient', operations: ['GetItem', 'PutItem', 'UpdateItem', 'Query', 'TransactWriteItems', 'BatchGetItem'] },
+  ddb: { package: 'dynamodb', client: 'DynamoDBClient', operations: ['GetItem', 'PutItem', 'UpdateItem', 'DeleteItem', 'Query', 'TransactWriteItems', 'BatchGetItem'] },
   s3: { package: 's3', client: 'S3Client', operations: ['PutObject', 'GetObject', 'HeadObject'] },
   sfn: { package: 'sfn', client: 'SFNClient', operations: ['StartExecution', 'DescribeExecution', 'SendTaskSuccess', 'SendTaskFailure'] },
   scheduler: { package: 'scheduler', client: 'SchedulerClient', operations: ['CreateSchedule', 'DeleteSchedule', 'GetSchedule'] },
@@ -13,11 +16,11 @@ export const AWS_APIS = Object.freeze({
 });
 
 const defaultLoad = (name) => import(`@aws-sdk/client-${name}`);
-const defaultLoadVersion = (name) => import(`@aws-sdk/client-${name}/package.json`, { with: { type: 'json' } });
+const defaultLoadVersion = async (name) => ({ default: JSON.parse(await readFile(`/var/runtime/node_modules/@aws-sdk/client-${name}/package.json`, 'utf8')) });
 
 export async function checkAwsSdk({ load = defaultLoad, loadVersion = defaultLoadVersion } = {}) {
   const packages = await Promise.all(Object.values(AWS_APIS).map(async (definition) => {
-    const result = { package: `@aws-sdk/client-${definition.package}`, ok: false };
+    const result = { package: `@aws-sdk/client-${definition.package}`, ok: false, version: '' };
     try {
       const sdk = await load(definition.package);
       result.ok = typeof sdk[definition.client] === 'function' && definition.operations.every((operation) => typeof sdk[`${operation}Command`] === 'function');
@@ -51,7 +54,7 @@ export function createAwsAdapters({ region, load = defaultLoad, timeoutSignal = 
       const method = operation[0].toLowerCase() + operation.slice(1);
       return [method, async (input) => {
         if (service === 'ddb') {
-          const mutations = operation === 'TransactWriteItems' ? (input.TransactItems ?? []).flatMap((item) => [item.Update, item.Put, item.Delete].filter(Boolean)) : ['UpdateItem', 'PutItem'].includes(operation) ? [input] : [];
+          const mutations = operation === 'TransactWriteItems' ? (input.TransactItems ?? []).flatMap((item) => [item.Update, item.Put, item.Delete].filter(Boolean)) : ['UpdateItem', 'PutItem', 'DeleteItem'].includes(operation) ? [input] : [];
           if (mutations.some((item) => !item.ConditionExpression)) throw new TypeError('DynamoDB mutations require a condition');
         }
         const { sdk, client } = await getClient();

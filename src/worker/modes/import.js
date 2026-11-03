@@ -6,8 +6,12 @@ import { contactPages, objectText, updateRecord, timestamp, conflict } from '../
 import { ensureContactMetadata } from '../../common/contact-metadata.js';
 import { AppError } from '../../common/http.js';
 
+import { eraseMatch } from '../../common/erase.js';
+import { reviewUnsupportedSchema } from '../../common/schema.js';
+
 export async function importContacts(event, runtime) {
   let record = await runtime.store.get('IMPORT', event.import_id);
+  if (await reviewUnsupportedSchema(runtime, record)) return { status: 'NEEDS_REVIEW', reason: 'UNSUPPORTED_SCHEMA' };
   if (!record || record.status !== 'RECEIVED') return { status: record?.status ?? 'NOT_FOUND' };
   try { record = await updateRecord(runtime, 'IMPORT', record.import_id, record, { status: 'VALIDATING' }); } catch (error) {
     if (conflict(error)) return { status: 'ALREADY_CLAIMED' };
@@ -20,16 +24,18 @@ export async function importContacts(event, runtime) {
     const definition = await runtime.ses.getContactList({ ContactListName: runtime.contactList });
     const topics = (definition.Topics ?? []).map((topic) => topic.TopicName);
     const parsed = validateImportCsv(source, { topics, importId: record.import_id, now: runtime.now });
-    const secret = await runtime.secrets.get('erase-hmac');
+    const secret = await runtime.secrets.get('address-hmac');
     const hmacKey = secret.key;
     // 完全削除との競合も避けるため、HMAC照合の直前から排他を保持する。
     await runtime.contactLock.acquire(record.import_id);
     acquired = true;
     const erased = new Set();
     const saved = new Set();
+    const eraseKeys = new Map();
+    for (const row of parsed.rows) eraseKeys.set(row.email, await eraseMatch(runtime, row.email));
     for (let offset = 0; offset < parsed.rows.length; offset += 50) {
-      const hashes = parsed.rows.slice(offset, offset + 50).map((row) => addressHash(row.email, hmacKey));
-      const response = await runtime.ddb.batchGetItem({ RequestItems: { [runtime.tableName]: { Keys: hashes.flatMap((SK) => ['ERASED', 'CONTACT_META'].map((PK) => marshall({ PK, SK }))), ConsistentRead: true } } });
+      const keys = parsed.rows.slice(offset, offset + 50).flatMap((row) => [marshall({ PK: 'ERASED', SK: eraseKeys.get(row.email) }), marshall({ PK: 'CONTACT_META', SK: addressHash(row.email, hmacKey) })]);
+      const response = await runtime.ddb.batchGetItem({ RequestItems: { [runtime.tableName]: { Keys: keys, ConsistentRead: true } } });
       // 未処理キーがあれば一致なしとみなさず、登録前に止める。
       if (Object.values(response.UnprocessedKeys ?? {}).some((item) => item.Keys?.length)) throw new Error('Unprocessed erased keys');
       for (const item of response.Responses?.[runtime.tableName] ?? []) {
@@ -44,7 +50,7 @@ export async function importContacts(event, runtime) {
     const rejected = [...parsed.rejected];
     const accepted = parsed.rows.filter((row) => {
       const hash = addressHash(row.email, hmacKey);
-      const code = erased.has(hash) ? 'ERASED_SKIPPED' : existing.has(row.email) || saved.has(hash) ? 'EXISTING_SKIPPED' : runtime.env !== 'prod' && !config.nonprod_allowlist.includes(row.email) ? 'NOT_ALLOWED_IN_ENV' : null;
+      const code = erased.has(eraseKeys.get(row.email)) || erased.has(hash) ? 'ERASED_SKIPPED' : existing.has(row.email) || saved.has(hash) ? 'EXISTING_SKIPPED' : runtime.env !== 'prod' && !config.nonprod_allowlist.includes(row.email) ? 'NOT_ALLOWED_IN_ENV' : null;
       if (code) rejected.push({ row: row.row, code });
       return !code;
     });

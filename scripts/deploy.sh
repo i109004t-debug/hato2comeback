@@ -7,6 +7,32 @@ PARAMS=${HT2_PARAMS:-build/$ENV.params.json}
 [[ -f $PARAMS ]] || die "Create $PARAMS from infra/params/$ENV.json and review its values"
 CHANGE_SET=${3:-ht2-$ENV-$EPOCHSECONDS}
 [[ $CHANGE_SET =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]] || die 'Invalid change set name'
+preflight_deploy() {
+  [[ $1 == UPDATE ]] || return 0
+  check_stack
+  local rows id state scheduled extra epoch now warnings='' blocked=0
+  now=$(date -u +%s)
+  rows=$(aws_text dynamodb query --region "$REGION" --table-name "$(output TableName)" --consistent-read \
+    --key-condition-expression 'PK = :pk' --expression-attribute-values '{":pk":{"S":"CAMPAIGN"}}' \
+    --projection-expression 'campaign_id,#state,scheduled_at' --expression-attribute-names '{"#state":"status"}' \
+    --query 'Items[].[campaign_id.S,status.S,scheduled_at.S]' --output text) || die 'DEPLOY_BLOCKED: Could not read campaigns'
+  while read -r id state scheduled extra; do
+    [[ -n $id ]] || continue
+    [[ $id =~ ^[0-9A-HJKMNP-TV-Z]{26}$ && -n $state && -z $extra ]] || die 'DEPLOY_BLOCKED: Invalid campaign record'
+    case "$state" in
+      QUEUED|SENDING) printf 'DEPLOY_BLOCKED %s %s\n' "$id" "$state" >&2; blocked=1 ;;
+      SCHEDULED)
+        epoch=$(date -u -d "$scheduled" +%s) || die "DEPLOY_BLOCKED $id SCHEDULED: Invalid schedule"
+        if (( epoch <= now + 3600 )); then printf 'DEPLOY_BLOCKED %s %s\n' "$id" "$state" >&2; blocked=1; fi ;;
+      PAUSED|NEEDS_REVIEW) warnings+="$id $state"$'\n' ;;
+    esac
+  done <<< "$rows"
+  (( blocked == 0 )) || die 'DEPLOY_BLOCKED: Active or imminent campaigns'
+  if [[ -n $warnings ]]; then
+    printf '%s' "$warnings" >&2
+    wait_input "Review stopped campaigns. Type: deploy $STACK stopped" "deploy $STACK stopped"
+  fi
+}
 review_topics() {
   local mode=$1 name old names=() changes
   # パラメータから消えたトピックと、リソース全体の削除・置換を検知する。
@@ -58,6 +84,7 @@ case "$ACTION" in
     status=$(aws_text cloudformation list-stacks --region "$REGION" \
       --query "StackSummaries[?StackName=='$STACK' && StackStatus!='DELETE_COMPLETE'].StackStatus | [0]" --output text)
     TYPE=$(stack_type "$status")
+    preflight_deploy "$TYPE"
     aws_text ssm get-parameter --region "$REGION" --name "/ht2/$ENV/config" --query Parameter.Version --output text > /dev/null
     [[ $(output Environment "ht2-edge-$ENV" us-east-1) == "$ENV" && $(output AccountId "ht2-edge-$ENV" us-east-1) == "$HT2_ACCOUNT_ID" ]] || die 'Edge stack environment/account mismatch'
     CERT=$(output CertificateArn "ht2-edge-$ENV" us-east-1)
@@ -87,6 +114,7 @@ case "$ACTION" in
     [[ -n ${3:-} ]] || die 'An explicit reviewed change set name is required'
     status=$(aws_text cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text)
     TYPE=$(stack_type "$status")
+    preflight_deploy "$TYPE"
     review_topics "$TYPE"
     wait_input "Reviewed all changes including Topics? Type: execute $STACK $CHANGE_SET" "execute $STACK $CHANGE_SET"
     aws cloudformation execute-change-set --region "$REGION" --stack-name "$STACK" --change-set-name "$CHANGE_SET"

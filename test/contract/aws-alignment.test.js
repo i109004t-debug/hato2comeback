@@ -11,7 +11,7 @@ import { addressHash } from '../../src/common/log.js';
 import { WORKFLOW_STEP_LIMIT } from '../../src/worker/state.js';
 import { ERROR_MESSAGES } from '../../web/js/api.js';
 import { PAUSE_LABELS } from '../../web/js/dom.js';
-import { fixture, failure, ID, ARN } from '../helpers/sending.js';
+import { fixture, failure, ID, ARN, eraseHash } from '../helpers/sending.js';
 import { managementFixture } from '../helpers/management.js';
 
 const checker = (f) => createPrecheck({ ...f.deps, store: f.store });
@@ -159,12 +159,12 @@ const sdk = (name) => {
   const definition = Object.values(AWS_APIS).find((value) => value.package === name);
   return Object.fromEntries([definition.client, ...definition.operations.map((operation) => `${operation}Command`)].map((key) => [key, class {}]));
 };
-test('第8段階6 sdk-checkは11パッケージと使用するexportを検査し取れる版を返す', async () => {
+test('第8段階6 sdk-checkは12パッケージと使用するexportを検査し取れる版を返す', async () => {
   const loads = [];
   const worker = createHandler({ sdkLoad: async (name) => { loads.push(name); return sdk(name); }, sdkVersionLoad: async () => ({ default: { version: '3.1000.0' } }) });
   const result = await worker({ mode: 'sdk-check' });
   assert.equal(result.ok, true);
-  assert.equal(result.packages.length, 11);
+  assert.equal(result.packages.length, 12);
   assert.deepEqual(new Set(loads), new Set(Object.values(AWS_APIS).map((entry) => entry.package)));
   assert.ok(result.packages.every((entry) => entry.ok && entry.version === '3.1000.0' && entry.package.startsWith('@aws-sdk/client-')));
 });
@@ -173,7 +173,7 @@ for (const missing of Object.values(AWS_APIS).map((entry) => entry.package)) tes
   assert.equal(result.ok, false);
   assert.equal(result.packages.filter((entry) => entry.ok === false).length, 1);
   assert.ok(!JSON.stringify(result).includes('private@example.com'));
-  assert.ok(result.packages.every((entry) => entry.version === undefined));
+  assert.ok(result.packages.every((entry) => entry.version === ''));
 });
 test('第8段階6 import成功でも必要なCommandがなければ失敗', async () => {
   const result = await checkAwsSdk({ load: async (name) => name === 'sesv2' ? {} : sdk(name), loadVersion: async () => ({}) });
@@ -208,7 +208,7 @@ test('第8段階11 プレビューだけに解除URLのダミーを渡す', asyn
 });
 for (const marker of ['ERASED', 'CONTACT_META']) test(`第8段階12 ${marker}に一致するSESの自動再作成連絡先は日次で消す`, async () => {
   const f = managementFixture({ count: 2 });
-  const hash = addressHash(f.addresses[0], '7'.repeat(64));
+  const hash = marker === 'ERASED' ? eraseHash(f.addresses[0]) : addressHash(f.addresses[0], '7'.repeat(64));
   f.ddb.set({ PK: marker, SK: hash, ...(marker === 'CONTACT_META' ? { erased: true } : {}) });
   f.ddb.set({ PK: 'CONTACT_META', SK: addressHash(f.addresses[1], '7'.repeat(64)), attributes: { name: '在籍会員' } });
   f.deps.ses.getContact = async () => { throw failure('NotFoundException', 404); };
@@ -224,7 +224,7 @@ for (const marker of ['ERASED', 'CONTACT_META']) test(`第8段階12 ${marker}に
 });
 for (const error of ['NotFoundException', 'AccessDeniedException']) test(`第8段階12 消去中の${error}を適切に扱う`, async () => {
   const f = managementFixture({ count: 1 });
-  f.ddb.set({ PK: 'ERASED', SK: addressHash(f.addresses[0], '7'.repeat(64)) });
+  f.ddb.set({ PK: 'ERASED', SK: eraseHash(f.addresses[0]) });
   f.deps.ses.deleteContact = async () => { throw failure(error, error === 'NotFoundException' ? 404 : 403); };
   const result = await f.worker({ mode: 'daily' }, f.context);
   assert.equal(result.results.backup, error === 'NotFoundException' ? 'PASS' : 'FAIL');

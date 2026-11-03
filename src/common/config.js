@@ -64,6 +64,7 @@ export function createConfig({ ssm, s3, dataBucket, env, now = defaultNow }) {
   let cache;
   let pending;
   return {
+    validUntil: () => cache?.expires ?? 0,
     async get() {
       if (cache && now() < cache.expires) return structuredClone(cache.value);
       if (!pending) {
@@ -84,7 +85,7 @@ export function createConfig({ ssm, s3, dataBucket, env, now = defaultNow }) {
               value.nonprod_allowlist = validateConfig({ nonprod_allowlist: addresses }, env).nonprod_allowlist;
             } catch { throw new AppError('CONFIGURATION_INVALID', 503, '非本番環境の送信許可リストを確認してください。'); }
           }
-          cache = { value, expires: started + 30000 };
+          cache = { value, expires: started + 5000 };
           return value;
         })();
       }

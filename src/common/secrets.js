@@ -6,7 +6,11 @@ function validateSecret(name, value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail();
   if (name === 'origin-verify') {
     if (Object.keys(value).some((key) => !['current', 'previous'].includes(key)) || typeof value.current !== 'string' || !value.current || (value.previous !== undefined && typeof value.previous !== 'string')) fail();
-  } else if (Object.keys(value).length !== 1 || typeof value.key !== 'string' || [...value.key].length < 32) fail();
+  } else {
+    const validKey = (entry) => entry && typeof entry === 'object' && !Array.isArray(entry) && typeof entry.kid === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(entry.kid) && typeof entry.key === 'string' && [...entry.key].length >= 32;
+    if (Object.keys(value).some((key) => !['kid', 'key', 'previous'].includes(key)) || !validKey(value)) fail();
+    if (value.previous !== undefined && (!validKey(value.previous) || Object.keys(value.previous).some((key) => !['kid', 'key'].includes(key)) || value.previous.kid === value.kid || value.previous.key === value.key)) fail();
+  }
   return value;
 }
 
@@ -16,7 +20,7 @@ export function createSecrets({ secrets, env, now = defaultNow }) {
   const pending = new Map();
   return {
     async get(name) {
-      if (!['origin-verify', 'erase-hmac'].includes(name)) throw new TypeError('Unknown secret');
+      if (!['origin-verify', 'address-hmac'].includes(name)) throw new TypeError('Unknown secret');
       const hit = cache.get(name);
       if (hit && now() < hit.expires) return structuredClone(hit.value);
       if (!pending.has(name)) {

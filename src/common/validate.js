@@ -50,8 +50,12 @@ const timestamp = { normalize: (value, context) => {
   if (!isIsoDateTime(value) || Date.parse(value) > (context.now ?? Date.now)()) throw invalid('at', 'DATETIME');
   return value;
 } };
-const consent = record({ at: timestamp, source: plainText(1, 100), version: plainText(0, 30) }, ['at', 'source']);
-const reconsent = record({ at: timestamp, source: plainText(1, 100) });
+const consentText = (min, max) => ({ ...plainText(min, max), check: (value) => {
+  if (/[^\s@<>]+@[^\s@<>]+/u.test(value)) throw new AppError('CONSENT_SOURCE_HAS_ADDRESS', 422, '同意の記録にメールアドレスを含めないでください。');
+  return true;
+} });
+const consent = record({ at: timestamp, source: consentText(1, 100), version: consentText(0, 30) }, ['at', 'source']);
+const reconsent = record({ at: timestamp, source: consentText(1, 100) });
 const note = plainText(1, 1000);
 const hash = string(64, 64, { pattern: /^[a-f0-9]{64}$/ });
 const evidence = string(1, 1024, { pattern: /^delivery-checks\/[A-Za-z0-9/_\-.]+$/, check: (value) => !value.split('/').includes('..') });

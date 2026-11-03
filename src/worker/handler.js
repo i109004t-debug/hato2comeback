@@ -16,6 +16,7 @@ import { finish } from './modes/finish.js';
 import { importContacts } from './modes/import.js';
 import { daily, authentication } from './modes/daily.js';
 import { backfillContacts } from './modes/contact-backfill.js';
+import { rekeyContacts } from './modes/rekey.js';
 import { createContactLock } from '../common/contact-lock.js';
 
 export function createHandler(deps = {}) {
@@ -26,6 +27,7 @@ export function createHandler(deps = {}) {
     senderDomain: environment.SENDER_DOMAIN, region: environment.AWS_REGION ?? 'ap-northeast-1',
     eventStreamArn: environment.EVENT_STREAM_ARN, alertTopicArn: environment.ALERT_TOPIC_ARN,
     stateMachineArn: environment.STATE_MACHINE_ARN, scheduleGroup: environment.SCHEDULE_GROUP,
+    eraseMacKeyId: environment.ERASE_MAC_KEY_ID, auditArchiveBucket: environment.AUDIT_ARCHIVE_BUCKET,
     ...createTime(deps), ...deps,
   };
   let runtime;
@@ -53,9 +55,10 @@ export function createHandler(deps = {}) {
   return async (event, context = {}) => {
     const logger = deps.logger ?? createLogger({ fn: 'worker', req_id: context.awsRequestId, now: base.now });
     try {
-      if (!event || !['prepare', 'send', 'finish', 'import', 'daily', 'contact-backfill', 'sdk-check', 'auth-check'].includes(event.mode)) throw invalid('mode');
+      if (!event || !['prepare', 'send', 'finish', 'import', 'daily', 'contact-backfill', 'rekey', 'sdk-check', 'auth-check'].includes(event.mode)) throw invalid('mode');
       if (event.mode === 'sdk-check') return await checkAwsSdk({ load: deps.sdkLoad, loadVersion: deps.sdkVersionLoad });
       if (event.mode === 'auth-check') return await authentication(initialize(context));
+      if (event.mode === 'rekey') return await rekeyContacts(event, initialize(context), context);
       if (event.mode === 'contact-backfill') return await backfillContacts(event, initialize(context), context);
       if (event.mode === 'daily') return await daily(event, initialize(context), context);
       if (event.mode === 'import') {

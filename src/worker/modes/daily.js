@@ -12,6 +12,8 @@ import { addressHash } from '../../common/log.js';
 import { AppError } from '../../common/http.js';
 import { ensureContactMetadata, applyContactMetadata } from '../../common/contact-metadata.js';
 import { marshall, unmarshall } from '../../common/ddb.js';
+import { eraseMatch } from '../../common/erase.js';
+import { reviewUnsupportedSchema } from '../../common/schema.js';
 import { normalizeEmail } from '../../common/email.js';
 
 function safeSesSpf(record) {
@@ -108,7 +110,7 @@ async function backup(runtime) {
   const definition = await runtime.ses.getContactList({ ContactListName: runtime.contactList });
   const topics = definition.Topics ?? [];
   const counts = Object.fromEntries(topics.map((topic) => [topic.TopicName, 0]));
-  const hmacKey = (await runtime.secrets.get('erase-hmac')).key;
+  const hmacKey = (await runtime.secrets.get('address-hmac')).key;
   let backfilled = 0;
   let missing = 0;
   let total = 0;
@@ -117,9 +119,12 @@ async function backup(runtime) {
       // 属性はSESの1ページ分だけ保持し、全会員分のMapを作らない。
       const metadata = new Map();
       const erased = new Set();
+      const matches = new Map();
+      for (const contact of contacts) matches.set(contact.EmailAddress, await eraseMatch(runtime, contact.EmailAddress));
       const hashes = [...new Set(contacts.map((contact) => addressHash(normalizeEmail(contact.EmailAddress).email, hmacKey)))];
+      const eraseKeys = [...new Set(matches.values())];
       for (let offset = 0; offset < hashes.length; offset += 50) {
-        const keys = hashes.slice(offset, offset + 50).flatMap((SK) => ['CONTACT_META', 'ERASED'].map((PK) => marshall({ PK, SK })));
+        const keys = [...hashes.slice(offset, offset + 50).map((SK) => marshall({ PK: 'CONTACT_META', SK })), ...eraseKeys.slice(offset, offset + 50).map((SK) => marshall({ PK: 'ERASED', SK }))];
         const response = await runtime.ddb.batchGetItem({ RequestItems: { [runtime.tableName]: { Keys: keys, ConsistentRead: true } } });
         if (Object.values(response.UnprocessedKeys ?? {}).some((item) => item.Keys?.length)) throw new Error('Unprocessed backup metadata keys');
         for (const item of response.Responses?.[runtime.tableName] ?? []) {
@@ -130,7 +135,7 @@ async function backup(runtime) {
       }
       for (const contact of contacts) {
         const hash = addressHash(normalizeEmail(contact.EmailAddress).email, hmacKey);
-        if (erased.has(hash)) {
+        if (erased.has(hash) || erased.has(matches.get(contact.EmailAddress))) {
           // 送信確認後の完全削除とSESの自動登録が競合した場合も、宛先は保存しない。
           try { await runtime.ses.deleteContact({ ContactListName: runtime.contactList, EmailAddress: contact.EmailAddress }); } catch (error) {
             if (error.name !== 'NotFoundException') throw error;
@@ -217,6 +222,7 @@ async function campaigns(runtime) {
   const config = await runtime.config.get();
   for await (const campaign of allRecords(runtime, 'CAMPAIGN')) {
     try {
+      if (await reviewUnsupportedSchema(runtime, campaign)) continue;
       if (['QUEUED', 'SCHEDULED'].includes(campaign.status) && runtime.now() - Date.parse(campaign.start_requested_at ?? campaign.updated_at ?? campaign.created_at) >= 900000) await checkStartResources(runtime, campaign);
       if (campaign.status === 'PAUSED' && runtime.now() - Date.parse(campaign.paused_at ?? campaign.updated_at) >= config.pause_timeout_days * 86400000 || ['QUEUED', 'SENDING'].includes(campaign.status) && runtime.now() - Date.parse(campaign.started_at) > config.max_pending_days * 86400000) {
         await updateCampaign(runtime, campaign, [campaign.status], { status: 'CANCELLED', cancel_reason: campaign.status === 'PAUSED' ? 'PAUSE_TIMEOUT' : 'MAX_PENDING_DAYS', completed_at: timestamp(runtime) });
@@ -237,6 +243,7 @@ async function campaigns(runtime) {
 async function locksAndImports(runtime) {
   const lock = await runtime.contactLock.get();
   for await (const record of allRecords(runtime, 'IMPORT')) {
+    if (await reviewUnsupportedSchema(runtime, record)) continue;
     if (record.status === 'IMPORTING' || lock?.owner === record.import_id && ['DONE', 'FAILED'].includes(record.status)) await reconcileImport(runtime, record);
     else if (lock?.owner === record.import_id && lock.job_id && ['SUBMITTING', 'NEEDS_REVIEW'].includes(record.status)) {
       const repaired = await updateRecord(runtime, 'IMPORT', record.import_id, record, { status: 'IMPORTING', job_id: lock.job_id });
@@ -252,9 +259,13 @@ async function locksAndImports(runtime) {
 
 export async function daily(event, runtime) {
   const results = {};
-  for (const [name, run] of Object.entries({ backup, authentication, account, campaigns, locks: locksAndImports, evidence: async (services) => {
+  for (const [name, run] of Object.entries({ eraseKey: async (services) => {
+    let enabled = false;
+    try { enabled = (await services.kms.describeKey({ KeyId: services.eraseMacKeyId })).KeyMetadata?.KeyState === 'Enabled'; } catch { /* 取得不能も安全側へ倒す。 */ }
+    if (!enabled) throw new AppError('ERASE_KEY_UNAVAILABLE', 503, '完全削除の鍵を確認してください。');
+  }, backup, authentication, account, campaigns, locks: locksAndImports, evidence: async (services) => {
     const monitor = services.monitoring ?? createMonitoring(services);
-    await monitor.check({ config: await services.config.get(), recent: true, deliveryValid: false });
+    await monitor.check({ config: await services.config.get(), recent: true, daily: true });
   } })) {
     try { await run(runtime); results[name] = 'PASS'; } catch (error) {
       results[name] = 'FAIL';

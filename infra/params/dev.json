@@ -1,4 +1,7 @@
 [
+  {"ParameterKey": "RuntimeVersionArn", "ParameterValue": ""},
+  {"ParameterKey": "AuditLockMode", "ParameterValue": "GOVERNANCE"},
+  {"ParameterKey": "AuditLockDays", "ParameterValue": "400"},
   {
     "ParameterKey": "Env",
     "ParameterValue": "dev"

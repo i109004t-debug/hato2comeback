@@ -208,7 +208,7 @@ export async function mount(ctx, id) {
     q('[data-failures-next]').disabled = true;
     try {
       const page = await ctx.api.request(`/campaigns/${campaign.campaign_id}/failures`, { query: { limit: 50, cursor } });
-      tableRows(q('[data-failures]'), page.items.map((item) => [visibleAddress(item.e, ctx.user), resultLabel(item.r), item.c, formatTime(item.t)]));
+      tableRows(q('[data-failures]'), page.items.map((item) => [item.m, resultLabel(item.r), item.c, formatTime(item.t)]));
       failureCursor = page.cursor;
       failurePageCursor = cursor;
       q('[data-failures-section]').hidden = false;

@@ -11,7 +11,7 @@ async function create({ runtime, body, user }) {
   if ((await runtime.ses.getAccount({})).ProductionAccessEnabled !== true) throw new AppError('IMPORT_REQUIRES_PRODUCTION', 422, 'SESのサンドボックスではCSV取込を使えません。1件ずつ登録してください。');
   if ((await runtime.contactLock.get())?.owner) throw new AppError('CONTACT_IMPORT_IN_PROGRESS', 409, '宛先の登録・取込を処理中です。');
   const id = (runtime.id ?? ulid)();
-  const record = { PK: 'IMPORT', SK: id, import_id: id, status: 'RECEIVED', version: 0, created_at: timestamp(runtime), created_by: user.sub, expires_at: Math.floor(runtime.now() / 1000) + 365 * 86400 };
+  const record = { schema_version: 1, PK: 'IMPORT', SK: id, import_id: id, status: 'RECEIVED', version: 0, created_at: timestamp(runtime), created_by: user.sub, expires_at: Math.floor(runtime.now() / 1000) + 365 * 86400 };
   const idem = { PK: 'IDEMP', SK, import_id: id, expires_at: Math.floor(runtime.now() / 1000) + 86400 };
   try {
     await runtime.ddb.transactWriteItems({ TransactItems: [

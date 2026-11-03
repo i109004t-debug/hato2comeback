@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { toAttribute, fromAttribute, marshall, unmarshall, createExpressions, buildUpdate, campaignUpdate, key, encodeCursor, decodeCursor, encodeSesCursor, decodeSesCursor, queryPages, createDdb } from '../../src/common/ddb.js';
 
 test('4.3 AttributeValueの往復: 型、入れ子、集合、バイナリ、大きい整数', () => {
-  const value = { PK: 'CAMPAIGN', SK: 'id', n: 3.14, zero: 0, negative: -3, huge: 9007199254740993n, nil: null, flag: false, empty: '', list: ['日本語', 1, null, { nested: true }], map: {}, ss: new Set(['a', 'b']), ns: new Set([1, 2]), bs: new Set([Uint8Array.of(1, 2)]), binary: Uint8Array.of(3, 4) };
+  const value = { schema_version: 1, PK: 'CAMPAIGN', SK: 'id', n: 3.14, zero: 0, negative: -3, huge: 9007199254740993n, nil: null, flag: false, empty: '', list: ['日本語', 1, null, { nested: true }], map: {}, ss: new Set(['a', 'b']), ns: new Set([1, 2]), bs: new Set([Uint8Array.of(1, 2)]), binary: Uint8Array.of(3, 4) };
   assert.deepEqual(unmarshall(marshall(value)), value);
   assert.deepEqual(toAttribute(true), { BOOL: true });
   assert.equal(fromAttribute({ N: '1e-3' }), 0.001);
@@ -52,7 +52,7 @@ test('10.1 DynamoDB/SESカーソルの往復・型・PKの検査', () => {
 test('4.3 空ページでもLastEvaluatedKeyがあれば最後までQueryする', async () => {
   const inputs = [];
   const cursor = key('CAMPAIGN', '1');
-  const pages = [{ Items: [], LastEvaluatedKey: cursor }, { Items: [marshall({ PK: 'CAMPAIGN', SK: '2' })] }];
+  const pages = [{ Items: [], LastEvaluatedKey: cursor }, { Items: [marshall({ schema_version: 1, PK: 'CAMPAIGN', SK: '2' })] }];
   const output = [];
   for await (const page of queryPages({ query: async (input) => { inputs.push(input); return pages.shift(); } }, { TableName: 'table' })) output.push(page);
   assert.equal(output.length, 2);
@@ -69,7 +69,7 @@ test('繰り返すカーソルは無限ループにしない', async () => {
 test('DDB補助は条件なし更新・監査更新を拒否し、競合をAppErrorにする', async () => {
   const inputs = [];
   const repository = createDdb({ tableName: 'table', ddb: {
-    getItem: async (input) => { inputs.push(input); return { Item: marshall({ PK: 'CAMPAIGN', SK: '1' }) }; },
+    getItem: async (input) => { inputs.push(input); return { Item: marshall({ schema_version: 1, PK: 'CAMPAIGN', SK: '1' }) }; },
     putItem: async (input) => { inputs.push(input); },
     updateItem: async () => { throw Object.assign(new Error(), { name: 'ConditionalCheckFailedException' }); },
   } });

@@ -1,11 +1,16 @@
 import { createSender, buildSendInput } from '../../common/sender.js';
 import { pauseReason } from '../../common/precheck.js';
 import { change, currentAction, flush, output, pause, readChunk, boundedWait, workflowStep } from '../state.js';
+import { contactMetadataKey } from '../../common/contact-metadata.js';
+import { maskEmail } from '../../common/email.js';
 import { prepare } from './prepare.js';
+
+import { reviewUnsupportedSchema } from '../../common/schema.js';
 
 export async function send(event, runtime, context) {
   const { campaign_id: id, execution_arn: executionArn } = event;
   let campaign = await runtime.store.get('CAMPAIGN', id);
+  if (await reviewUnsupportedSchema(runtime, campaign)) return output('REVIEW', { reason: 'UNSUPPORTED_SCHEMA' });
   if (campaign?.execution_arn === executionArn && campaign.status === 'QUEUED' && campaign.pause_phase === 'prepare') return prepare(event, runtime);
   if (campaign?.execution_arn === executionArn && ['SENDING', 'PAUSED'].includes(campaign.status)) {
     const budget = await workflowStep(runtime, id, executionArn, 'send');
@@ -75,7 +80,7 @@ export async function send(event, runtime, context) {
     if (['ACCEPTED', 'FAILED', 'UNKNOWN', 'SKIPPED'].includes(result.type)) {
       pending[result.type === 'SKIPPED' ? 'skipped_blocked' : result.type.toLowerCase()] += 1;
       if (result.type !== 'SKIPPED') runtime.metrics.emit({ ACCEPTED: 'Accepted', FAILED: 'Failed', UNKNOWN: 'Unknown' }[result.type], 1);
-      if (result.type !== 'ACCEPTED') results.push({ e: lines[i].e, r: result.type, c: result.code, t: new Date(runtime.now()).toISOString() });
+      if (result.type !== 'ACCEPTED') results.push({ a: await contactMetadataKey(runtime, lines[i].e), m: maskEmail(lines[i].e), r: result.type, c: result.code, t: new Date(runtime.now()).toISOString(), ci: chunk, ix: i });
       if (result.type === 'ACCEPTED' || result.type === 'UNKNOWN') lastSendAt = new Date(limiter.lastStart).toISOString();
       if (result.type === 'UNKNOWN') unknownRun += 1;
       if (result.type === 'ACCEPTED') unknownRun = 0;
