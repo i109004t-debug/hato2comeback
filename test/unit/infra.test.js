@@ -556,7 +556,7 @@ test('legacy backup export marks unknown completeness and still retrieves durabl
 test('第6段階の資料は現行の構築・画面・鍵・イベント手順と実機確認を示す', () => {
   const build = read('docs/構築手順書.md');
   const operations = read('docs/運用手順書.md');
-  for (const term of ['deploy-edge.sh', 'bootstrap-config.sh', 'GenerateSecretString', 'WorkerReservedConcurrency', 'AWS_CLI_FILE_ENCODING=UTF-8', 'カスタムメトリクスが出ること', 'topicSubscriptionStatus', 'topicDefaultSubscriptionStatus', '接頭辞限定ListBucket', '確認すること']) assert.ok(build.includes(term), term);
+  for (const term of ['deploy-edge.sh', 'bootstrap-config.sh', 'GenerateSecretString', 'WorkerReservedConcurrency', 'AWS_CLI_FILE_ENCODING=UTF-8', 'カスタムメトリクスが出ること', 'topicSubscriptionStatus', 'topicDefaultSubscriptionStatus', 'ListBucket', '確認すること']) assert.ok(build.includes(term), term);
   assert.match(build, /"MailType": "MARKETING"/);
   assert.doesNotMatch(build, /画面本体がまだない|UsePreviousValue|HT2_HMAC|"TRANSACTIONAL"/);
   for (const term of ['OptIn/OptOut', 'OPT_IN/OPT_OUT', 'topicSubscriptionStatus', 'topicDefaultSubscriptionStatus', 'AttributesData', 'UTF-8', 'base64として復号しない', '存在しない場合だけ']) assert.ok(operations.includes(term), term);

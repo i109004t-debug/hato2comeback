@@ -61,6 +61,8 @@
    - 通知の宛先は、請求の責任者とAWSの管理者にします。
    - Budgetsの数字は遅れて反映されます。また、通知の額に達しても料金は止まりません。[AWS Budgets](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-managing-costs.html)
 
+**費用と時間の目安**：固定費は1環境あたり月に約15ドルです。ほかに、1,000通あたり約0.1ドルの送信料がかかります。最初のテスト送信までには、ドメインの認証やSESの審査の待ち時間を含めて、数日から2週間ほどかかります。内訳は[README](../README.md)の「費用と時間の目安」を見てください。
+
 **費用の見積もりについて**：配信を止めても、WAF、Route 53、S3、CloudWatchなどの費用はかかり続けます。SESの送信数だけで見積もらないでください。次のものも含めてください。
 
 - 3つの環境（dev、stg、prod）
@@ -217,7 +219,7 @@ aws s3api get-bucket-policy-status --region ap-northeast-1 --bucket "$ARTIFACT_B
 
 ## 7. HT2を構築し、利用開始を引き継ぐ
 
-dev、stg、prodの順に、[構築手順書](構築手順書.md)を最初から実施します。この手順書で初めて作るサービスは、CloudFormationがまとめて作ります。LambdaやDynamoDBなどを、コンソールで先に個別に作らないでください。
+dev、stg、prodの順に、[構築手順書](構築手順書.md)を最初から実施します。構築手順書のコマンドはprodの例で書いてあるので、冒頭の「環境ごとの置き換え」の表に従って読み替えてください。この手順書で初めて作るサービスは、CloudFormationがまとめて作ります。LambdaやDynamoDBなどを、コンソールで先に個別に作らないでください。
 
 | 順番 | すること・完了の条件 |
 |---|---|
