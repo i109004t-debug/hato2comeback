@@ -1,0 +1,1365 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Postline main stack (ap-northeast-1, one account per environment)
+Parameters:
+  Env:
+    Type: String
+    AllowedValues: [dev, stg, prod]
+  ExpectedAccountId:
+    Type: String
+    AllowedPattern: '[0-9]{12}'
+  SenderDomain:
+    Type: String
+    AllowedPattern: '[a-z0-9][a-z0-9.-]+[a-z0-9]'
+  AppDomain:
+    Type: String
+    AllowedPattern: 'app\.[a-z0-9][a-z0-9.-]+'
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+  CertificateArn:
+    Type: String
+    AllowedPattern: 'arn:aws:acm:us-east-1:[0-9]{12}:certificate/.+'
+  WebAclArn:
+    Type: String
+    AllowedPattern: 'arn:aws:wafv2:us-east-1:[0-9]{12}:global/webacl/.+'
+  CognitoDomainPrefix:
+    Type: String
+    AllowedPattern: '[a-z0-9-]{1,63}'
+  AlertEmail:
+    Type: String
+  EraseHmacKey:
+    Type: String
+    NoEcho: true
+    AllowedPattern: '[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]='
+    Description: Immutable base64 encoded 32-byte key; supply securely, never rotate
+  OriginSecretStage:
+    Type: String
+    Default: AWSCURRENT
+    AllowedPattern: '[A-Za-z0-9_-]{1,100}'
+  Topic1Name:
+    Type: String
+    Default: kaiho
+    AllowedPattern: '[a-z0-9_]{1,20}'
+  Topic1Display:
+    Type: String
+    Default: 会報
+  Topic1Description:
+    Type: String
+    Default: 毎月の会報をお届けします
+  Topic2Name:
+    Type: String
+    Default: event
+    AllowedPattern: '([a-z0-9_]{1,20})?'
+  Topic2Display:
+    Type: String
+    Default: イベント・チケット情報
+  Topic2Description:
+    Type: String
+    Default: イベントやチケット先行受付のお知らせ
+Rules:
+  AccountAndRegion:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::AccountId', !Ref ExpectedAccountId]
+        AssertDescription: Use the dedicated environment account
+      - Assert: !Equals [!Ref 'AWS::Region', ap-northeast-1]
+        AssertDescription: Main stack must be deployed in Tokyo
+  DistinctTopics:
+    Assertions:
+      - Assert: !Not [!Equals [!Ref Topic1Name, !Ref Topic2Name]]
+        AssertDescription: Topic names must be unique
+Conditions:
+  IsProd: !Equals [!Ref Env, prod]
+  HasTopic2: !Not [!Equals [!Ref Topic2Name, '']]
+Resources:
+  WebBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]}
+      VersioningConfiguration: {Status: Enabled}
+  DataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]}
+      LifecycleConfiguration:
+        Rules:
+          - {Id: Staging, Status: Enabled, Prefix: imports/staging/, ExpirationInDays: 7}
+          - {Id: Ready, Status: Enabled, Prefix: imports/ready/, ExpirationInDays: 365}
+          - {Id: Reports, Status: Enabled, Prefix: imports/report/, ExpirationInDays: 365}
+          - {Id: Recipients, Status: Enabled, Prefix: recipients/, ExpirationInDays: 30}
+          - {Id: Results, Status: Enabled, Prefix: results/, ExpirationInDays: 180}
+          - {Id: Contacts, Status: Enabled, Prefix: backups/contacts/, ExpirationInDays: 365}
+          - {Id: DeliveryChecks, Status: Enabled, Prefix: delivery-checks/, ExpirationInDays: 180}
+          - {Id: Multipart, Status: Enabled, AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}}
+  EventLogBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
+      BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]}
+      LifecycleConfiguration:
+        Rules:
+          - {Id: Events, Status: Enabled, Prefix: ses-events/, ExpirationInDays: 180}
+          - {Id: Errors, Status: Enabled, Prefix: errors/, ExpirationInDays: 180}
+          - {Id: Queries, Status: Enabled, Prefix: athena-results/, ExpirationInDays: 30}
+  DataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref DataBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt DataBucket.Arn, !Sub '${DataBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
+          - Effect: Allow
+            Principal: {Service: ses.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub '${DataBucket.Arn}/imports/ready/*'
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
+              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:import-job/*'}
+  EventLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref EventLogBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt EventLogBucket.Arn, !Sub '${EventLogBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
+  Table:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: !Sub 'postline-${Env}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions: [{AttributeName: PK, AttributeType: S}, {AttributeName: SK, AttributeType: S}]
+      KeySchema: [{AttributeName: PK, KeyType: HASH}, {AttributeName: SK, KeyType: RANGE}]
+      PointInTimeRecoverySpecification: {PointInTimeRecoveryEnabled: true}
+      TimeToLiveSpecification: {AttributeName: expires_at, Enabled: true}
+      DeletionProtectionEnabled: !If [IsProd, true, false]
+      SSESpecification: {SSEEnabled: true}
+  ConfigurationSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name: !Sub 'postline-${Env}'
+      DeliveryOptions: {TlsPolicy: REQUIRE}
+      ReputationOptions: {ReputationMetricsEnabled: true}
+      SendingOptions: {SendingEnabled: true}
+  EmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Ref SenderDomain
+      ConfigurationSetAttributes: {ConfigurationSetName: !Ref ConfigurationSet}
+      DkimAttributes: {SigningEnabled: true}
+      DkimSigningAttributes: {NextSigningKeyLength: RSA_2048_BIT}
+      MailFromAttributes:
+        MailFromDomain: !Sub 'bounce.${SenderDomain}'
+        BehaviorOnMxFailure: REJECT_MESSAGE
+  ContactList:
+    Type: AWS::SES::ContactList
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      ContactListName: postline
+      Description: !Sub 'Postline ${Env}'
+      Topics:
+        - TopicName: !Ref Topic1Name
+          DisplayName: !Ref Topic1Display
+          Description: !Ref Topic1Description
+          DefaultSubscriptionStatus: OPT_OUT
+        - !If
+          - HasTopic2
+          - TopicName: !Ref Topic2Name
+            DisplayName: !Ref Topic2Display
+            Description: !Ref Topic2Description
+            DefaultSubscriptionStatus: OPT_OUT
+          - !Ref 'AWS::NoValue'
+  CloudWatchDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSet
+      EventDestination:
+        Name: cloudwatch
+        Enabled: true
+        MatchingEventTypes: [send, reject, bounce, complaint, delivery, deliveryDelay, subscription, renderingFailure]
+        CloudWatchDestination:
+          DimensionConfigurations: [{DimensionName: campaign, DimensionValueSource: messageTag, DefaultDimensionValue: none}]
+  FirehoseDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSet
+      EventDestination:
+        Name: firehose
+        Enabled: true
+        MatchingEventTypes: [send, reject, bounce, complaint, delivery, deliveryDelay, subscription, renderingFailure]
+        KinesisFirehoseDestination: {IAMRoleARN: !GetAtt SesFirehoseRole.Arn, DeliveryStreamARN: !GetAtt EventStream.Arn}
+  FirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: firehose.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition: {StringEquals: {'sts:ExternalId': !Ref 'AWS::AccountId'}}
+      Policies:
+        - PolicyName: EventDelivery
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:AbortMultipartUpload, s3:GetBucketLocation, s3:ListBucket, s3:ListBucketMultipartUploads]
+                Resource: !GetAtt EventLogBucket.Arn
+              - Effect: Allow
+                Action: [s3:PutObject, s3:GetObject]
+                Resource: [!Sub '${EventLogBucket.Arn}/ses-events/*', !Sub '${EventLogBucket.Arn}/errors/*']
+  SesFirehoseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ses.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
+              ArnEquals: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}'}
+      Policies:
+        - PolicyName: SesEvents
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - {Effect: Allow, Action: 'firehose:PutRecordBatch', Resource: !GetAtt EventStream.Arn}
+  EventStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Sub 'postline-${Env}-events'
+      DeliveryStreamType: DirectPut
+      DeliveryStreamEncryptionConfigurationInput: {KeyType: AWS_OWNED_CMK}
+      ExtendedS3DestinationConfiguration:
+        BucketARN: !GetAtt EventLogBucket.Arn
+        RoleARN: !GetAtt FirehoseRole.Arn
+        Prefix: 'ses-events/!{timestamp:yyyy/MM/dd}/'
+        ErrorOutputPrefix: 'errors/!{firehose:error-output-type}/!{timestamp:yyyy/MM/dd}/'
+        CompressionFormat: GZIP
+        BufferingHints: {IntervalInSeconds: 300, SizeInMBs: 5}
+        ProcessingConfiguration:
+          Enabled: true
+          Processors: [{Type: AppendDelimiterToRecord}]
+  EventsDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref 'AWS::AccountId'
+      DatabaseInput: {Name: postline_events}
+  EventsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref 'AWS::AccountId'
+      DatabaseName: !Ref EventsDatabase
+      TableInput:
+        Name: ses_events
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          classification: json
+          'projection.enabled': 'true'
+          'projection.dt.type': date
+          'projection.dt.range': '2026/01/01,NOW'
+          'projection.dt.format': yyyy/MM/dd
+          'projection.dt.interval': '1'
+          'projection.dt.interval.unit': DAYS
+          'storage.location.template': !Join ['', ['s3://', !Ref EventLogBucket, '/ses-events/${dt}/']]
+        PartitionKeys: [{Name: dt, Type: string}]
+        StorageDescriptor:
+          Location: !Sub 's3://${EventLogBucket}/ses-events/'
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo: {SerializationLibrary: org.openx.data.jsonserde.JsonSerDe}
+          Columns:
+            - {Name: eventtype, Type: string}
+            - {Name: mail, Type: 'struct<timestamp:string,messageid:string,source:string,destination:array<string>,tags:map<string,array<string>>>'}
+            - {Name: send, Type: 'map<string,string>'}
+            - {Name: delivery, Type: 'struct<timestamp:string,recipients:array<string>,smtpresponse:string,reportingmta:string,processingtimemillis:bigint>'}
+            - {Name: bounce, Type: 'struct<timestamp:string,feedbackid:string,bouncetype:string,bouncesubtype:string,bouncedrecipients:array<struct<emailaddress:string,action:string,status:string,diagnosticcode:string>>>'}
+            - {Name: complaint, Type: 'struct<timestamp:string,feedbackid:string,complaintfeedbacktype:string,complainedrecipients:array<struct<emailaddress:string>>>'}
+            - {Name: deliverydelay, Type: 'struct<timestamp:string,delaytype:string,expirationtime:string,delayedrecipients:array<struct<emailaddress:string,status:string,diagnosticcode:string>>>'}
+            - {Name: subscription, Type: 'struct<timestamp:string,contactlist:string,source:string,newtopicpreferences:struct<unsubscribeall:boolean,topicpreferences:array<struct<topicname:string,subscriptionstatus:string>>>,oldtopicpreferences:struct<unsubscribeall:boolean,topicpreferences:array<struct<topicname:string,subscriptionstatus:string>>>>'}
+            - {Name: reject, Type: 'struct<reason:string>'}
+            - {Name: failure, Type: 'struct<errormessage:string,templatename:string>'}
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub 'postline-${Env}'
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        BytesScannedCutoffPerQuery: 10737418240
+        ResultConfiguration:
+          OutputLocation: !Sub 's3://${EventLogBucket}/athena-results/'
+          EncryptionConfiguration: {EncryptionOption: SSE_S3}
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      UserPoolName: !Sub 'postline-${Env}'
+      UserPoolTier: ESSENTIALS
+      DeletionProtection: !If [IsProd, ACTIVE, INACTIVE]
+      UsernameAttributes: [email]
+      UsernameConfiguration: {CaseSensitive: false}
+      AutoVerifiedAttributes: [email]
+      UserAttributeUpdateSettings: {AttributesRequireVerificationBeforeUpdate: [email]}
+      AdminCreateUserConfig: {AllowAdminCreateUserOnly: true}
+      Schema:
+        - {Name: email, AttributeDataType: String, Required: true, Mutable: true}
+        - {Name: name, AttributeDataType: String, Mutable: true}
+      Policies:
+        PasswordPolicy: {MinimumLength: 12, RequireUppercase: true, RequireLowercase: true, RequireNumbers: true, RequireSymbols: true, TemporaryPasswordValidityDays: 7}
+      MfaConfiguration: 'ON'
+      EnabledMfas: [SOFTWARE_TOKEN_MFA]
+      AccountRecoverySetting: {RecoveryMechanisms: [{Name: verified_email, Priority: 1}]}
+  WebClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: WebClient
+      GenerateSecret: false
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthFlows: [code]
+      AllowedOAuthScopes: [openid, email, profile]
+      SupportedIdentityProviders: [COGNITO]
+      ExplicitAuthFlows: []
+      ReadAttributes: [email, email_verified, name]
+      WriteAttributes: [name]
+      CallbackURLs: [!Sub 'https://${AppDomain}/callback.html']
+      LogoutURLs: [!Sub 'https://${AppDomain}/']
+      AccessTokenValidity: 15
+      IdTokenValidity: 15
+      RefreshTokenValidity: 8
+      TokenValidityUnits: {AccessToken: minutes, IdToken: minutes, RefreshToken: hours}
+      RefreshTokenRotation: {Feature: ENABLED, RetryGracePeriodSeconds: 0}
+      EnableTokenRevocation: true
+      PreventUserExistenceErrors: ENABLED
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Ref CognitoDomainPrefix
+      ManagedLoginVersion: 2
+  ManagedLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref WebClient
+      UseCognitoProvidedValues: true
+  AdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: {UserPoolId: !Ref UserPool, GroupName: admin}
+  SenderGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: {UserPoolId: !Ref UserPool, GroupName: sender}
+  ApproverGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: {UserPoolId: !Ref UserPool, GroupName: approver}
+  ViewerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties: {UserPoolId: !Ref UserPool, GroupName: viewer}
+  ConfigParameter:
+    Type: AWS::SSM::Parameter
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub '/postline/${Env}/config'
+      Type: String
+      Value:
+        Fn::Sub:
+          - |
+            {"sending_enabled":false,"max_rate_per_sec":10,"ses_rate_safety_factor":0.8,"batch_size":200,"progress_every":20,"max_recipients_per_campaign":100000,"lock_ttl_seconds":7200,"pause_timeout_days":7,"reputation_alarms":["postline-${Env}-ses-bounce-rate","postline-${Env}-ses-complaint-rate"],"campaign_bounce_pause_ratio":0.05,"campaign_min_sample":200,"campaign_delay_pause_ratio":0.10,"daily_send_cap":1000,"delivery_check_required":${IsProduction},"nonprod_allowlist":[],"health_check_seconds":60,"auth_status_max_age_hours":26,"delivery_check_max_age_days":90,"max_pending_days":7,"event_log_stale_seconds":900}
+          - IsProduction: !If [IsProd, 'true', 'false']
+  OriginSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub '/postline/${Env}/origin-verify'
+      GenerateSecretString:
+        SecretStringTemplate: '{"previous":""}'
+        GenerateStringKey: current
+        PasswordLength: 64
+        ExcludePunctuation: true
+  EraseSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub '/postline/${Env}/erase-hmac'
+      SecretString: !Sub '{"key":"${EraseHmacKey}"}'
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/lambda/postline-${Env}-api', RetentionInDays: 365}
+  WorkerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/lambda/postline-${Env}-worker', RetentionInDays: 365}
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/aws/vendedlogs/states/postline-${Env}', RetentionInDays: 90}
+  AccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: {LogGroupName: !Sub '/postline/${Env}/http-api', RetentionInDays: 365}
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'postline-${Env}-alerts'
+      Subscription: [{Protocol: email, Endpoint: !Ref AlertEmail}]
+  ScheduleGroup:
+    Type: AWS::Scheduler::ScheduleGroup
+    Properties: {Name: !Sub 'postline-${Env}'}
+  DailySchedule:
+    Type: AWS::Scheduler::Schedule
+    DependsOn: [SchedulerPolicy, WorkerPolicy]
+    Properties:
+      Name: !Sub 'postline-${Env}-daily'
+      GroupName: !Ref ScheduleGroup
+      ScheduleExpression: cron(0 3 * * ? *)
+      ScheduleExpressionTimezone: Asia/Tokyo
+      FlexibleTimeWindow: {Mode: 'OFF'}
+      Target:
+        Arn: !GetAtt WorkerFunction.Arn
+        RoleArn: !GetAtt SchedulerRole.Arn
+        Input: '{"mode":"daily"}'
+        RetryPolicy: {MaximumRetryAttempts: 0}
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: ApiLogGroup
+    Properties:
+      FunctionName: !Sub 'postline-${Env}-api'
+      Runtime: nodejs24.x
+      Architectures: [arm64]
+      Handler: src/api/handler.handler
+      Code: ../build/backend.zip
+      Role: !GetAtt ApiRole.Arn
+      MemorySize: 256
+      Timeout: 29
+      LoggingConfig: {LogFormat: JSON, LogGroup: !Ref ApiLogGroup}
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          TABLE_NAME: !Ref Table
+          DATA_BUCKET: !Ref DataBucket
+          CONTACT_LIST: !Ref ContactList
+          CONFIG_SET: !Ref ConfigurationSet
+          SENDER_DOMAIN: !Ref SenderDomain
+          EVENT_STREAM_ARN: !GetAtt EventStream.Arn
+          ALERT_TOPIC_ARN: !Ref AlertTopic
+          WEB_CLIENT_ID: !Ref WebClient
+          USER_POOL_ID: !Ref UserPool
+          STATE_MACHINE_ARN: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:postline-${Env}'
+          SCHEDULE_GROUP: !Ref ScheduleGroup
+          SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
+          WORKER_FUNCTION_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
+          CONFIG_PARAM: !Ref ConfigParameter
+          ORIGIN_SECRET_ARN: !Ref OriginSecret
+          ERASE_SECRET_ARN: !Ref EraseSecret
+          LOG_LEVEL: INFO
+  WorkerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: WorkerLogGroup
+    Properties:
+      FunctionName: !Sub 'postline-${Env}-worker'
+      Runtime: nodejs24.x
+      Architectures: [arm64]
+      Handler: src/worker/handler.handler
+      Code: ../build/backend.zip
+      Role: !GetAtt WorkerRole.Arn
+      MemorySize: 512
+      Timeout: 900
+      ReservedConcurrentExecutions: 3
+      LoggingConfig: {LogFormat: JSON, LogGroup: !Ref WorkerLogGroup}
+      Environment:
+        Variables:
+          ENV: !Ref Env
+          TABLE_NAME: !Ref Table
+          DATA_BUCKET: !Ref DataBucket
+          CONTACT_LIST: !Ref ContactList
+          CONFIG_SET: !Ref ConfigurationSet
+          SENDER_DOMAIN: !Ref SenderDomain
+          EVENT_STREAM_ARN: !GetAtt EventStream.Arn
+          ALERT_TOPIC_ARN: !Ref AlertTopic
+          WEB_CLIENT_ID: !Ref WebClient
+          USER_POOL_ID: !Ref UserPool
+          STATE_MACHINE_ARN: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:postline-${Env}'
+          SCHEDULE_GROUP: !Ref ScheduleGroup
+          SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
+          WORKER_FUNCTION_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
+          CONFIG_PARAM: !Ref ConfigParameter
+          ORIGIN_SECRET_ARN: !Ref OriginSecret
+          ERASE_SECRET_ARN: !Ref EraseSecret
+          LOG_LEVEL: INFO
+  WorkerEventInvokeConfig:
+    Type: AWS::Lambda::EventInvokeConfig
+    Properties: {FunctionName: !Ref WorkerFunction, Qualifier: '$LATEST', MaximumRetryAttempts: 0, MaximumEventAgeInSeconds: 60}
+  BroadcastStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    DependsOn: StateMachinePolicy
+    Properties:
+      StateMachineName: !Sub 'postline-${Env}'
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StateMachineRole.Arn
+      DefinitionS3Location: broadcast.asl.json
+      DefinitionSubstitutions:
+        WorkerFunctionArn: !GetAtt WorkerFunction.Arn
+        TableName: !Ref Table
+      LoggingConfiguration:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations: [{CloudWatchLogsLogGroup: {LogGroupArn: !GetAtt StateMachineLogGroup.Arn}}]
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties: {Name: !Sub 'postline-${Env}', ProtocolType: HTTP}
+  JwtAuthorizer:
+    Type: AWS::ApiGatewayV2::Authorizer
+    Properties:
+      ApiId: !Ref HttpApi
+      Name: CognitoJwt
+      AuthorizerType: JWT
+      IdentitySource: ['$request.header.Authorization']
+      JwtConfiguration:
+        Audience: [!Ref WebClient]
+        Issuer: !Sub 'https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}'
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties: {ApiId: !Ref HttpApi, IntegrationType: AWS_PROXY, IntegrationUri: !GetAtt ApiFunction.Arn, PayloadFormatVersion: '2.0', TimeoutInMillis: 29000}
+  ApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: 'ANY /api/{proxy+}'
+      AuthorizationType: JWT
+      AuthorizationScopes: [openid]
+      AuthorizerId: !Ref JwtAuthorizer
+      Target: !Sub 'integrations/${ApiIntegration}'
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: '$default'
+      AutoDeploy: true
+      DefaultRouteSettings: {ThrottlingBurstLimit: 50, ThrottlingRateLimit: 20, DetailedMetricsEnabled: true}
+      AccessLogSettings:
+        DestinationArn: !GetAtt AccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","routeKey":"$context.routeKey","status":"$context.status","responseLength":"$context.responseLength","integrationLatency":"$context.integrationLatency","sub":"$context.authorizer.claims.sub"}'
+  ApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*/*/api/*'
+      SourceAccount: !Ref 'AWS::AccountId'
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig: {Name: !Sub 'postline-${Env}', OriginAccessControlOriginType: s3, SigningBehavior: always, SigningProtocol: sigv4}
+  SecurityHeaders:
+    Type: AWS::CloudFront::ResponseHeadersPolicy
+    Properties:
+      ResponseHeadersPolicyConfig:
+        Name: !Sub 'postline-${Env}-security'
+        SecurityHeadersConfig:
+          StrictTransportSecurity: {AccessControlMaxAgeSec: 63072000, IncludeSubdomains: true, Preload: true, Override: true}
+          ContentTypeOptions: {Override: true}
+          FrameOptions: {FrameOption: DENY, Override: true}
+          ReferrerPolicy: {ReferrerPolicy: no-referrer, Override: true}
+          ContentSecurityPolicy:
+            Override: true
+            ContentSecurityPolicy: !Sub "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com; form-action 'self' https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com; frame-ancestors 'none'; base-uri 'none'; object-src 'none'"
+        CustomHeadersConfig:
+          Items: [{Header: Permissions-Policy, Value: 'camera=(), microphone=(), geolocation=()', Override: true}]
+  ApiCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub 'postline-${Env}-api-no-cache'
+        MinTTL: 0
+        DefaultTTL: 0
+        MaxTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: false
+          CookiesConfig: {CookieBehavior: none}
+          HeadersConfig: {HeaderBehavior: none}
+          QueryStringsConfig: {QueryStringBehavior: none}
+  ApiOriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties:
+      OriginRequestPolicyConfig:
+        Name: !Sub 'postline-${Env}-api-forward'
+        CookiesConfig: {CookieBehavior: all}
+        HeadersConfig: {HeaderBehavior: allExcept, Headers: [host]}
+        QueryStringsConfig: {QueryStringBehavior: all}
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        Aliases: [!Ref AppDomain]
+        DefaultRootObject: index.html
+        WebACLId: !Ref WebAclArn
+        ViewerCertificate: {AcmCertificateArn: !Ref CertificateArn, SslSupportMethod: sni-only, MinimumProtocolVersion: TLSv1.2_2021}
+        Origins:
+          - Id: web
+            DomainName: !GetAtt WebBucket.RegionalDomainName
+            OriginAccessControlId: !Ref OriginAccessControl
+            S3OriginConfig: {OriginAccessIdentity: ''}
+          - Id: api
+            DomainName: !Sub '${HttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+            CustomOriginConfig: {OriginProtocolPolicy: https-only, OriginSSLProtocols: [TLSv1.2]}
+            OriginCustomHeaders:
+              - HeaderName: x-origin-verify
+                HeaderValue: !Sub '{{resolve:secretsmanager:${OriginSecret}:SecretString:current:${OriginSecretStage}}}'
+        DefaultCacheBehavior:
+          TargetOriginId: web
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachedMethods: [GET, HEAD]
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          ResponseHeadersPolicyId: !Ref SecurityHeaders
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: api
+            ViewerProtocolPolicy: https-only
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE]
+            CachedMethods: [GET, HEAD]
+            CachePolicyId: !Ref ApiCachePolicy
+            OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+            ResponseHeadersPolicyId: !Ref SecurityHeaders
+  WebBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: cloudfront.amazonaws.com}
+            Action: s3:GetObject
+            Resource: !Sub '${WebBucket.Arn}/*'
+            Condition: {StringEquals: {'AWS:SourceArn': !Sub 'arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}'}}
+          - Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt WebBucket.Arn, !Sub '${WebBucket.Arn}/*']
+            Condition: {Bool: {'aws:SecureTransport': 'false'}}
+  AppRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref AppDomain
+      Type: A
+      AliasTarget: {HostedZoneId: Z2FDTNDATAQYW2, DNSName: !GetAtt Distribution.DomainName}
+  AppIpv6Record:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref AppDomain
+      Type: AAAA
+      AliasTarget: {HostedZoneId: Z2FDTNDATAQYW2, DNSName: !GetAtt Distribution.DomainName}
+  ApiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: states.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
+              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:postline-${Env}'}
+  SchedulerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: scheduler.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
+              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule-group/postline-${Env}'}
+  ApiPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: ApiRuntime
+      Roles: [!Ref ApiRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+            Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/postline-${Env}-api:*'
+          - Effect: Allow
+            Action: ['ssm:GetParameter']
+            Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/postline/${Env}/config'
+          - Effect: Allow
+            Action: ['secretsmanager:GetSecretValue']
+            Resource: [!Ref OriginSecret, !Ref EraseSecret]
+          - Effect: Allow
+            # TransactWriteItemsは内包するPutのdynamodb:PutItemで認可される。
+            Action: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:Query']
+            Resource: !GetAtt Table.Arn
+          - Effect: Allow
+            Action: ['ses:GetAccount', 'ses:GetSuppressedDestination', 'ses:GetImportJob']
+            Resource: '*'
+          - Effect: Allow
+            Action: ['ses:GetEmailIdentity', 'ses:GetConfigurationSet', 'ses:GetConfigurationSetEventDestinations', 'ses:GetContactList', 'ses:ListContacts', 'ses:GetContact', 'ses:CreateContact', 'ses:UpdateContact', 'ses:DeleteContact', 'ses:CreateEmailTemplate', 'ses:GetEmailTemplate', 'ses:TestRenderEmailTemplate']
+            Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
+          - Effect: Allow
+            Action: ['ses:SendEmail']
+            Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
+            Condition:
+              StringLike: {'ses:FromAddress': !Sub '*@${SenderDomain}'}
+          - Effect: Allow
+            Action: ['cloudwatch:GetMetricData', 'cloudwatch:DescribeAlarms']
+            Resource: '*'
+          - Effect: Allow
+            Action: ['s3:GetObject']
+            Resource: [!Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/delivery-checks/*', !Sub '${DataBucket.Arn}/imports/report/*', !Sub '${DataBucket.Arn}/recipients/*']
+          - Effect: Allow
+            Action: ['s3:PutObject']
+            Resource: [!Sub '${DataBucket.Arn}/imports/staging/*']
+          - Effect: Allow
+            Action: ['states:StartExecution']
+            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:postline-${Env}'
+          - Effect: Allow
+            Action: ['states:DescribeExecution']
+            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:postline-${Env}:*'
+          - Effect: Allow
+            Action: ['states:SendTaskSuccess', 'states:SendTaskFailure']
+            Resource: '*'
+          - Effect: Allow
+            Action: ['scheduler:CreateSchedule', 'scheduler:DeleteSchedule', 'scheduler:GetSchedule']
+            Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/postline-${Env}/pl-*'
+          - Effect: Allow
+            Action: ['iam:PassRole']
+            Resource: !GetAtt SchedulerRole.Arn
+            Condition: {StringEquals: {'iam:PassedToService': scheduler.amazonaws.com}}
+          - Effect: Allow
+            Action: ['cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser']
+            Resource: !GetAtt UserPool.Arn
+          - Effect: Allow
+            Action: ['lambda:InvokeFunction']
+            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
+          - Sid: DenyFixedTemplateMutation
+            Effect: Deny
+            Action: ['ses:UpdateEmailTemplate', 'ses:DeleteEmailTemplate']
+            Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*'
+          - Sid: DenyDestructiveSes
+            Effect: Deny
+            Action: ['ses:DeleteContactList', 'ses:UpdateContactList', 'ses:DeleteEmailIdentity', 'ses:DeleteSuppressedDestination', 'ses:PutAccount*']
+            Resource: '*'
+          - Sid: DenyAuditMutation
+            Effect: Deny
+            Action: ['dynamodb:UpdateItem', 'dynamodb:DeleteItem']
+            Resource: !GetAtt Table.Arn
+            Condition:
+              'ForAnyValue:StringLike': {'dynamodb:LeadingKeys': ['AUDIT#*']}
+  WorkerPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: WorkerRuntime
+      Roles: [!Ref WorkerRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+            Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/postline-${Env}-worker:*'
+          - Effect: Allow
+            Action: ['ssm:GetParameter']
+            Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/postline/${Env}/config'
+          - Effect: Allow
+            Action: ['secretsmanager:GetSecretValue']
+            Resource: !Ref EraseSecret
+          - Effect: Allow
+            Action: ['dynamodb:GetItem', 'dynamodb:PutItem', 'dynamodb:UpdateItem', 'dynamodb:Query', 'dynamodb:BatchGetItem']
+            Resource: !GetAtt Table.Arn
+          - Effect: Allow
+            Action: ['ses:GetAccount', 'ses:CreateImportJob', 'ses:GetImportJob']
+            Resource: '*'
+          - Effect: Allow
+            Action: ['ses:GetEmailIdentity', 'ses:GetConfigurationSet', 'ses:GetConfigurationSetEventDestinations', 'ses:GetContactList', 'ses:ListContacts']
+            Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
+          - Effect: Allow
+            Action: ['ses:SendEmail']
+            Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
+            Condition:
+              StringLike: {'ses:FromAddress': !Sub '*@${SenderDomain}'}
+          - Effect: Allow
+            Action: ['ses:DeleteEmailTemplate']
+            Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*'
+          - Effect: Allow
+            Action: ['cloudwatch:GetMetricData', 'cloudwatch:DescribeAlarms']
+            Resource: '*'
+          - Effect: Allow
+            Action: ['s3:GetObject']
+            Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*', !Sub '${DataBucket.Arn}/delivery-checks/*']
+          - Effect: Allow
+            Action: ['s3:PutObject']
+            Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*']
+          - Effect: Allow
+            Action: ['sns:Publish']
+            Resource: !Ref AlertTopic
+          - Sid: DenyFixedTemplateMutation
+            Effect: Deny
+            Action: ['ses:UpdateEmailTemplate']
+            Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*'
+          - Sid: DenyDestructiveSes
+            Effect: Deny
+            Action: ['ses:DeleteContactList', 'ses:UpdateContactList', 'ses:DeleteEmailIdentity', 'ses:DeleteSuppressedDestination', 'ses:PutAccount*']
+            Resource: '*'
+          - Sid: DenyAuditMutation
+            Effect: Deny
+            Action: ['dynamodb:UpdateItem', 'dynamodb:DeleteItem']
+            Resource: !GetAtt Table.Arn
+            Condition:
+              'ForAnyValue:StringLike': {'dynamodb:LeadingKeys': ['AUDIT#*']}
+  StateMachinePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: Broadcast
+      Roles: [!Ref StateMachineRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ['lambda:InvokeFunction']
+            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
+          - Effect: Allow
+            Action: ['dynamodb:UpdateItem']
+            Resource: !GetAtt Table.Arn
+            Condition: {'ForAllValues:StringEquals': {'dynamodb:LeadingKeys': [CAMPAIGN]}}
+          - Effect: Allow
+            Action: ['logs:CreateLogDelivery', 'logs:GetLogDelivery', 'logs:UpdateLogDelivery', 'logs:DeleteLogDelivery', 'logs:ListLogDeliveries', 'logs:PutResourcePolicy', 'logs:DescribeResourcePolicies', 'logs:DescribeLogGroups']
+            Resource: '*'
+  SchedulerPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: Schedules
+      Roles: [!Ref SchedulerRole]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ['states:StartExecution']
+            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:postline-${Env}'
+          - Effect: Allow
+            Action: ['lambda:InvokeFunction']
+            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
+  SesBounceRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-ses-bounce-rate'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Namespace: AWS/SES
+      MetricName: Reputation.BounceRate
+      Statistic: Maximum
+      Period: 300
+      Threshold: 0.03
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+  SesComplaintRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-ses-complaint-rate'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Namespace: AWS/SES
+      MetricName: Reputation.ComplaintRate
+      Statistic: Maximum
+      Period: 300
+      Threshold: 0.0008
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+  NeedsReviewAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-needs-review'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Namespace: !Sub 'Postline-${Env}'
+      MetricName: NeedsReview
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+  UnknownResultsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-unknown-results'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Namespace: !Sub 'Postline-${Env}'
+      MetricName: Unknown
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+  SesBusyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-ses-busy'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Namespace: !Sub 'Postline-${Env}'
+      MetricName: SesBusy
+      Statistic: Sum
+      Period: 300
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+  FirehoseDeliveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-firehose-delivery'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Namespace: AWS/Firehose
+      MetricName: DeliveryToS3.Success
+      Statistic: Minimum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      Dimensions: [{Name: DeliveryStreamName, Value: !Ref EventStream}]
+  FirehoseFreshnessAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-firehose-freshness'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Namespace: AWS/Firehose
+      MetricName: DeliveryToS3.DataFreshness
+      Statistic: Maximum
+      Period: 300
+      Threshold: 900
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions: [{Name: DeliveryStreamName, Value: !Ref EventStream}]
+  ApiErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-api-lambda-errors'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions: [{Name: FunctionName, Value: !Ref ApiFunction}]
+  WorkerErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-worker-lambda-errors'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions: [{Name: FunctionName, Value: !Ref WorkerFunction}]
+  RenderingOrRejectAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-rendering-or-reject'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Metrics:
+        - Id: total
+          Expression: 'SUM([rendering,reject])'
+          ReturnData: true
+        - Id: rendering
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/SES
+              MetricName: RenderingFailure
+            Period: 300
+            Stat: Sum
+        - Id: reject
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/SES
+              MetricName: Reject
+            Period: 300
+            Stat: Sum
+  StateMachineFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-sfn-failed'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Metrics:
+        - Id: total
+          Expression: 'SUM([failed,timedout])'
+          ReturnData: true
+        - Id: failed
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/States
+              MetricName: ExecutionsFailed
+              Dimensions: [{Name: StateMachineArn, Value: !Ref BroadcastStateMachine}]
+            Period: 300
+            Stat: Sum
+        - Id: timedout
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/States
+              MetricName: ExecutionsTimedOut
+              Dimensions: [{Name: StateMachineArn, Value: !Ref BroadcastStateMachine}]
+            Period: 300
+            Stat: Sum
+  Api5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-api-5xx'
+      AlarmActions: [!Ref AlertTopic]
+      EvaluationPeriods: 1
+      DatapointsToAlarm: 1
+      TreatMissingData: missing
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Metrics:
+        - Id: total
+          Expression: 'IF(requests>0,100*errors/requests)'
+          ReturnData: true
+        - Id: errors
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/ApiGateway
+              MetricName: 5xx
+              Dimensions: [{Name: ApiId, Value: !Ref HttpApi}]
+            Period: 300
+            Stat: Sum
+        - Id: requests
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: AWS/ApiGateway
+              MetricName: Count
+              Dimensions: [{Name: ApiId, Value: !Ref HttpApi}]
+            Period: 300
+            Stat: Sum
+  SystemPauseReason0Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-operator-switch'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: OPERATOR_SWITCH}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason1Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-reputation-alarm'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: REPUTATION_ALARM}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason2Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-campaign-bounce'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: CAMPAIGN_BOUNCE}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason3Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-campaign-delay'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: CAMPAIGN_DELAY}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason4Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-events-missing'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: EVENTS_MISSING}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason5Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-event-log-stale'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: EVENT_LOG_STALE}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason6Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-monitoring-unavailable'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: MONITORING_UNAVAILABLE}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason7Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-content-error'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: CONTENT_ERROR}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason8Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-auth-check'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: AUTH_CHECK}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason9Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-ses-paused'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: SES_PAUSED}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason10Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-ses-unstable'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: SES_UNSTABLE}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  SystemPauseReason11Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-quota'
+      Namespace: !Sub 'Postline/${Env}'
+      MetricName: Paused
+      Dimensions: [{Name: Reason, Value: QUOTA}]
+      Statistic: Sum
+      Period: 300
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      TreatMissingData: missing
+  PausedBySystemAlarm:
+    Type: AWS::CloudWatch::CompositeAlarm
+    Properties:
+      AlarmName: !Sub 'postline-${Env}-paused-by-system'
+      AlarmActions: [!Ref AlertTopic]
+      AlarmRule: !Sub
+        - 'ALARM("${A0}") OR ALARM("${A1}") OR ALARM("${A2}") OR ALARM("${A3}") OR ALARM("${A4}") OR ALARM("${A5}") OR ALARM("${A6}") OR ALARM("${A7}") OR ALARM("${A8}") OR ALARM("${A9}") OR ALARM("${A10}") OR ALARM("${A11}")'
+        - A0: !Ref SystemPauseReason0Alarm
+          A1: !Ref SystemPauseReason1Alarm
+          A2: !Ref SystemPauseReason2Alarm
+          A3: !Ref SystemPauseReason3Alarm
+          A4: !Ref SystemPauseReason4Alarm
+          A5: !Ref SystemPauseReason5Alarm
+          A6: !Ref SystemPauseReason6Alarm
+          A7: !Ref SystemPauseReason7Alarm
+          A8: !Ref SystemPauseReason8Alarm
+          A9: !Ref SystemPauseReason9Alarm
+          A10: !Ref SystemPauseReason10Alarm
+          A11: !Ref SystemPauseReason11Alarm
+Outputs:
+  Environment:
+    Value: !Ref Env
+  AccountId:
+    Value: !Ref 'AWS::AccountId'
+  AppUrl:
+    Value: !Sub 'https://${AppDomain}'
+  WebBucketName:
+    Value: !Ref WebBucket
+  DataBucketName:
+    Value: !Ref DataBucket
+  EventLogBucketName:
+    Value: !Ref EventLogBucket
+  DistributionId:
+    Value: !Ref Distribution
+  DistributionDomain:
+    Value: !GetAtt Distribution.DomainName
+  UserPoolId:
+    Value: !Ref UserPool
+  WebClientId:
+    Value: !Ref WebClient
+  AuthDomain:
+    Value: !Sub 'https://${CognitoDomainPrefix}.auth.${AWS::Region}.amazoncognito.com'
+  RedirectUri:
+    Value: !Sub 'https://${AppDomain}/callback.html'
+  LogoutUri:
+    Value: !Sub 'https://${AppDomain}/'
+  ApiBaseUrl:
+    Value: '/api/v1'
+  ApiEndpoint:
+    Value: !GetAtt HttpApi.ApiEndpoint
+  WorkerFunctionName:
+    Value: !Ref WorkerFunction
+  StateMachineArn:
+    Value: !Ref BroadcastStateMachine
+  ContactListName:
+    Value: !Ref ContactList
+  ConfigurationSetName:
+    Value: !Ref ConfigurationSet
+  EventStreamArn:
+    Value: !GetAtt EventStream.Arn
+  AlertTopicArn:
+    Value: !Ref AlertTopic
+  ConfigParameterName:
+    Value: !Ref ConfigParameter
+  OriginSecretArn:
+    Value: !Ref OriginSecret
+  EraseSecretArn:
+    Value: !Ref EraseSecret
+  AthenaWorkGroupName:
+    Value: !Ref AthenaWorkGroup
+  Dkim1Name:
+    Value: !GetAtt EmailIdentity.DkimDNSTokenName1
+  Dkim1Value:
+    Value: !GetAtt EmailIdentity.DkimDNSTokenValue1
+  Dkim2Name:
+    Value: !GetAtt EmailIdentity.DkimDNSTokenName2
+  Dkim2Value:
+    Value: !GetAtt EmailIdentity.DkimDNSTokenValue2
+  Dkim3Name:
+    Value: !GetAtt EmailIdentity.DkimDNSTokenName3
+  Dkim3Value:
+    Value: !GetAtt EmailIdentity.DkimDNSTokenValue3
+  MailFromName:
+    Value: !Sub 'bounce.${SenderDomain}'
+  MailFromMx:
+    Value: '10 feedback-smtp.ap-northeast-1.amazonses.com'
+  MailFromSpf:
+    Value: 'v=spf1 include:amazonses.com ~all'
+  DmarcName:
+    Value: !Sub '_dmarc.${SenderDomain}'
+  DmarcSuggestedValue:
+    Value: !Sub 'v=DMARC1; p=none; rua=mailto:dmarc@${SenderDomain}; adkim=s; aspf=r'

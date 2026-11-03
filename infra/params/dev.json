@@ -1,0 +1,70 @@
+[
+  {
+    "ParameterKey": "Env",
+    "ParameterValue": "dev"
+  },
+  {
+    "ParameterKey": "ExpectedAccountId",
+    "ParameterValue": "111111111111"
+  },
+  {
+    "ParameterKey": "SenderDomain",
+    "ParameterValue": "fc.dev.example.jp"
+  },
+  {
+    "ParameterKey": "AppDomain",
+    "ParameterValue": "app.dev.example.jp"
+  },
+  {
+    "ParameterKey": "HostedZoneId",
+    "ParameterValue": "ZEXAMPLE000000"
+  },
+  {
+    "ParameterKey": "CertificateArn",
+    "ParameterValue": "arn:aws:acm:us-east-1:111111111111:certificate/example-certificate"
+  },
+  {
+    "ParameterKey": "WebAclArn",
+    "ParameterValue": "arn:aws:wafv2:us-east-1:111111111111:global/webacl/example/example-id"
+  },
+  {
+    "ParameterKey": "CognitoDomainPrefix",
+    "ParameterValue": "postline-example-dev"
+  },
+  {
+    "ParameterKey": "AlertEmail",
+    "ParameterValue": "postline-dev@example.jp"
+  },
+  {
+    "ParameterKey": "EraseHmacKey",
+    "ParameterValue": "ZXhhbXBsZS1rZXktcmVwbGFjZS1iZWZvcmUtdXNlMDA="
+  },
+  {
+    "ParameterKey": "OriginSecretStage",
+    "ParameterValue": "AWSCURRENT"
+  },
+  {
+    "ParameterKey": "Topic1Name",
+    "ParameterValue": "kaiho"
+  },
+  {
+    "ParameterKey": "Topic1Display",
+    "ParameterValue": "会報"
+  },
+  {
+    "ParameterKey": "Topic1Description",
+    "ParameterValue": "毎月の会報をお届けします"
+  },
+  {
+    "ParameterKey": "Topic2Name",
+    "ParameterValue": "event"
+  },
+  {
+    "ParameterKey": "Topic2Display",
+    "ParameterValue": "イベント・チケット情報"
+  },
+  {
+    "ParameterKey": "Topic2Description",
+    "ParameterValue": "イベントやチケット先行受付のお知らせ"
+  }
+]

@@ -1,0 +1,95 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Postline certificate and CloudFront WAF (us-east-1)
+Parameters:
+  Env:
+    Type: String
+    AllowedValues: [dev, stg, prod]
+  ExpectedAccountId:
+    Type: String
+    AllowedPattern: '[0-9]{12}'
+  AppDomain:
+    Type: String
+    AllowedPattern: 'app\.[a-z0-9][a-z0-9.-]+'
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+Rules:
+  AccountAndRegion:
+    Assertions:
+      - Assert: !Equals [!Ref 'AWS::AccountId', !Ref ExpectedAccountId]
+        AssertDescription: Use the dedicated environment account
+      - Assert: !Equals [!Ref 'AWS::Region', us-east-1]
+        AssertDescription: Edge stack must be deployed in us-east-1
+Resources:
+  Certificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref AppDomain
+      ValidationMethod: DNS
+      DomainValidationOptions: [{DomainName: !Ref AppDomain, HostedZoneId: !Ref HostedZoneId}]
+  WebAcl:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub 'postline-${Env}'
+      Scope: CLOUDFRONT
+      DefaultAction: {Allow: {}}
+      AssociationConfig: {RequestBody: {CLOUDFRONT: {DefaultSizeInspectionLimit: KB_64}}}
+      VisibilityConfig: {CloudWatchMetricsEnabled: true, SampledRequestsEnabled: false, MetricName: !Sub 'postline-${Env}'}
+      Rules:
+        - Name: Common
+          Priority: 0
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+              RuleActionOverrides: [{Name: SizeRestrictions_BODY, ActionToUse: {Count: {}}}]
+              ScopeDownStatement:
+                NotStatement:
+                  Statement:
+                    SizeConstraintStatement:
+                      FieldToMatch: {Body: {OversizeHandling: MATCH}}
+                      ComparisonOperator: GT
+                      Size: 65536
+                      TextTransformations: [{Priority: 0, Type: NONE}]
+          VisibilityConfig: {CloudWatchMetricsEnabled: true, SampledRequestsEnabled: false, MetricName: Common}
+        - Name: KnownBadInputs
+          Priority: 1
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+              ScopeDownStatement:
+                NotStatement:
+                  Statement:
+                    SizeConstraintStatement:
+                      FieldToMatch: {Body: {OversizeHandling: MATCH}}
+                      ComparisonOperator: GT
+                      Size: 65536
+                      TextTransformations: [{Priority: 0, Type: NONE}]
+          VisibilityConfig: {CloudWatchMetricsEnabled: true, SampledRequestsEnabled: false, MetricName: KnownBadInputs}
+        - Name: IpReputation
+          Priority: 2
+          OverrideAction: {None: {}}
+          Statement: {ManagedRuleGroupStatement: {VendorName: AWS, Name: AWSManagedRulesAmazonIpReputationList}}
+          VisibilityConfig: {CloudWatchMetricsEnabled: true, SampledRequestsEnabled: false, MetricName: IpReputation}
+        - Name: ApiRate
+          Priority: 3
+          Action: {Block: {}}
+          Statement:
+            RateBasedStatement:
+              AggregateKeyType: IP
+              Limit: 1000
+              EvaluationWindowSec: 300
+              ScopeDownStatement:
+                ByteMatchStatement:
+                  FieldToMatch: {UriPath: {}}
+                  PositionalConstraint: STARTS_WITH
+                  SearchString: /api/
+                  TextTransformations: [{Priority: 0, Type: NONE}]
+          VisibilityConfig: {CloudWatchMetricsEnabled: true, SampledRequestsEnabled: false, MetricName: ApiRate}
+Outputs:
+  CertificateArn:
+    Value: !Ref Certificate
+  WebAclArn:
+    Value: !GetAtt WebAcl.Arn
