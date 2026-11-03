@@ -67,7 +67,7 @@
         </aside>
       </div>
       <section data-review hidden class="panel"><h2>要確認：管理者の判断が必要です</h2><p>配送の記録を確かめてください。Sendイベントがないことは、送られていない証拠にはなりません。不明の宛先へ自動では送り直しません。</p><p data-review-range></p><pre data-review-recipients class="mail-text"></pre><details><summary>配送の記録を確認するAthenaクエリ</summary><pre data-query class="mail-text"></pre></details><label>判断<select data-decision></select></label><p data-review-risk class="notice"></p><label>確認した内容・判断の理由<textarea data-review-note maxlength="1000" rows="3"></textarea></label><button data-review-submit type="button" class="danger">判断を確定</button></section>
-      <section data-failures-section hidden class="panel"><h2>失敗・不明の宛先</h2><p>結果が不明な宛先へは自動で送り直しません。</p><div class="table-scroll"><table><thead><tr><th>宛先</th><th>分類</th><th>コード</th><th>時刻</th></tr></thead><tbody data-failures></tbody></table></div><button data-failures-next type="button" disabled>次へ</button></section>
+      <section data-failures-section hidden class="panel"><h2>失敗・不明・停止済みの宛先</h2><p>結果が不明な宛先へは自動で送り直しません。停止済みの宛先は送らず、失敗の件数には含めません。</p><div class="table-scroll"><table><thead><tr><th>宛先</th><th>分類</th><th>コード</th><th>時刻</th></tr></thead><tbody data-failures></tbody></table></div><button data-failures-next type="button" disabled>次へ</button></section>
     </section>
   </template>
 
@@ -81,7 +81,7 @@
   </template>
 
   <template id="history-template">
-    <section><div class="page-heading"><div><p class="eyebrow">配信と結果の記録</p><h1>配信履歴</h1></div><a href="#/send">新しい配信を作成</a></div><p data-message role="status" class="message"></p><section class="panel"><p class="hint">新しい順に50件ずつ表示します。詳細画面では10秒ごとに件数を更新します。</p><div class="table-scroll"><table><thead><tr><th>状態</th><th>配信リスト・件名</th><th>作成日時／予約日時</th><th>送信済み（SES受付）／総数</th><th>失敗／不明</th></tr></thead><tbody data-history></tbody></table></div><button data-next type="button" disabled>次へ</button></section></section>
+    <section><div class="page-heading"><div><p class="eyebrow">配信と結果の記録</p><h1>配信履歴</h1></div><a href="#/send">新しい配信を作成</a></div><p data-message role="status" class="message"></p><section class="panel"><p class="hint">新しい順に50件ずつ表示します。詳細画面では10秒ごとに件数を更新します。</p><div class="table-scroll"><table><thead><tr><th>状態</th><th>配信リスト・件名</th><th>作成日時／予約日時</th><th>送信済み（SES受付）／総数</th><th>失敗／不明</th><th>停止済みのため送らなかった</th></tr></thead><tbody data-history></tbody></table></div><button data-next type="button" disabled>次へ</button></section></section>
   </template>
 
   <template id="settings-template">

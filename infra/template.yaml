@@ -849,6 +849,12 @@ Resources:
           - Effect: Allow
             Action: ['sns:Publish']
             Resource: !Ref AlertTopic
+          - Effect: Allow
+            Action: ['states:DescribeExecution']
+            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:postline-${Env}:*'
+          - Effect: Allow
+            Action: ['scheduler:GetSchedule']
+            Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/postline-${Env}/pl-*'
           - Sid: DenyFixedTemplateMutation
             Effect: Deny
             Action: ['ses:UpdateEmailTemplate']

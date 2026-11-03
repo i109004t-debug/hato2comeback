@@ -40,12 +40,20 @@ export function managementFixture(options = {}) {
     },
     sfn: {
       startExecution: async (input) => { if (f.executions.has(input.name)) throw failure('ExecutionAlreadyExists', 400); f.executions.set(input.name, input); return { executionArn: 'arn:aws:states:ap-northeast-1:123456789012:execution:postline:' + input.name }; },
+      describeExecution: async (input) => {
+        const execution = f.executions.get(input.executionArn.split(':').at(-1));
+        if (!execution) throw failure('ExecutionDoesNotExist', 400);
+        return { executionArn: input.executionArn, status: 'RUNNING', input: execution.input };
+      },
       sendTaskSuccess: async (input) => { f.tokens.push({ success: input }); return {}; },
       sendTaskFailure: async (input) => { f.tokens.push({ failure: input }); return {}; },
     },
     scheduler: {
       createSchedule: async (input) => { if (f.schedules.has(input.Name)) throw failure('ConflictException', 409); f.schedules.set(input.Name, input); return {}; },
-      getSchedule: async (input) => f.schedules.get(input.Name),
+      getSchedule: async (input) => {
+        if (!f.schedules.has(input.Name)) throw failure('ResourceNotFoundException', 404);
+        return structuredClone(f.schedules.get(input.Name));
+      },
       deleteSchedule: async (input) => { if (!f.schedules.has(input.Name)) throw failure('ResourceNotFoundException', 404); f.schedules.delete(input.Name); return {}; },
     },
     lambda: { invoke: async (input) => { f.invocations.push(input); return { StatusCode: 202 }; } },

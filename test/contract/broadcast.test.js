@@ -58,6 +58,7 @@ test('T-08 一時停止後の新規送信は20件以内、未保存受付数も�
 
 test('T-09 再開トークン保存の競合はSendBatchへ進み、新状態から継続', async () => {
   const caught = definition.States.WaitForResume.Catch.find((entry) => entry.ErrorEquals.includes('DynamoDb.ConditionalCheckFailedException'));
+  assert.deepEqual(caught.ErrorEquals, ['DynamoDb.ConditionalCheckFailedException', 'DynamoDB.ConditionalCheckFailedException']);
   assert.equal(caught.Next, 'SendBatch');
   const f = fixture({ count: 2 }); await f.prepare();
   f.setCampaign({ status: 'PAUSED', pause_reason: 'USER' });

@@ -25,6 +25,7 @@ export function createHandler(deps = {}) {
     contactList: environment.CONTACT_LIST, configSet: environment.CONFIG_SET,
     senderDomain: environment.SENDER_DOMAIN, region: environment.AWS_REGION ?? 'ap-northeast-1',
     eventStreamArn: environment.EVENT_STREAM_ARN, alertTopicArn: environment.ALERT_TOPIC_ARN,
+    stateMachineArn: environment.STATE_MACHINE_ARN, scheduleGroup: environment.SCHEDULE_GROUP,
     ...createTime(deps), ...deps,
   };
   let runtime;

@@ -47,14 +47,14 @@ export async function flush(runtime, campaignId, executionArn, progress, pending
     // 状態条件は付けない。停止・中止後も、受付済みの件数を失わない。
     const ConditionExpression = `${expressions.equals('execution_arn', executionArn)} AND ${expressions.equals('version', current.version)}`;
     const counts = { ...current.counts };
-    for (const field of ['accepted', 'failed', 'unknown']) counts[field] = (counts[field] ?? 0) + pending[field];
+    for (const field of ['accepted', 'failed', 'unknown', 'skipped_blocked']) counts[field] = (counts[field] ?? 0) + (pending[field] ?? 0);
     try {
       if (extra.result_keys) extra.result_keys = [...new Set([...(current.result_keys ?? []), ...extra.result_keys])];
       const saved = await runtime.store.update('CAMPAIGN', campaignId, {
         ConditionExpression,
         ...buildUpdate({ set: { ...extra, progress, counts, version: current.version + 1, updated_at: new Date(runtime.now()).toISOString(), ...(lastSendAt ? { last_send_at: lastSendAt } : {}) } }, expressions),
       });
-      pending.accepted = 0; pending.failed = 0; pending.unknown = 0;
+      pending.accepted = 0; pending.failed = 0; pending.unknown = 0; pending.skipped_blocked = 0;
       await runtime.lock.save(campaignId, limiter);
       return saved;
     } catch (error) { if (!isConflict(error)) throw error; }

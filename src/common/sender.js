@@ -113,7 +113,7 @@ export function createSender(deps) {
       if (daily.reserved_attempts > checked.config.daily_send_cap) return waitDay();
       const final = await guard(context, limiter);
       if (final.type) return final;
-      if (await contactBlocked({ ...deps, store }, context.address, context.topic)) return { type: 'FAILED', code: 'CONTACT_BLOCKED' };
+      if (await contactBlocked({ ...deps, store }, context.address, context.topic)) return { type: 'SKIPPED', code: 'CONTACT_BLOCKED' };
       // 連絡先の読取が遅れても、送信開始時点のロック余裕と健康検査の期限を守る。
       if (!(final.held.expires_at_ms > now() + 10000)) return pause('LOCK_LOST');
       if (now() - health.checkedAt >= Math.min(60, final.config.health_check_seconds) * 1000) continue;
@@ -130,7 +130,7 @@ export function createSender(deps) {
       if (input.Destination?.ToAddresses?.length !== 1 || input.Destination.CcAddresses?.length || input.Destination.BccAddresses?.length || input.ListManagementOptions?.ContactListName !== deps.contactList || input.ConfigurationSetName !== deps.configSet || !input.ListManagementOptions.TopicName) throw new TypeError('Invalid single-recipient send request');
       context = { ...context, address: input.Destination.ToAddresses[0], topic: input.ListManagementOptions.TopicName };
       if (normalizeEmail(context.address).email !== context.address) throw new TypeError('Noncanonical send address');
-      if (await contactBlocked({ ...deps, store }, context.address, context.topic)) return { type: 'FAILED', code: 'CONTACT_BLOCKED' };
+      if (await contactBlocked({ ...deps, store }, context.address, context.topic)) return { type: 'SKIPPED', code: 'CONTACT_BLOCKED' };
       if (context.test) {
         const address = input.Destination?.ToAddresses?.[0];
         const org = await store.get('SETTINGS', 'ORG');

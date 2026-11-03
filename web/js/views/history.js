@@ -2,7 +2,7 @@ import { errorText } from '../api.js';
 import { clone, element, tableRows, showMessage, on, formatCount, formatTime, statusLabel, createActionGate } from '../dom.js';
 
 export function historyRow(campaign) {
-  return { state: statusLabel(campaign.status), title: campaign.subject || '件名の保持期間が過ぎています', topic: campaign.topic_display ?? campaign.topic ?? '—', created: formatTime(campaign.created_at), scheduled: campaign.scheduled_at ? formatTime(campaign.scheduled_at) : '', accepted: `${formatCount(campaign.counts?.accepted)} ／ ${formatCount(campaign.recipients_total)}`, problems: `${formatCount(campaign.counts?.failed)} ／ ${formatCount(campaign.counts?.unknown)}` };
+  return { state: statusLabel(campaign.status), title: campaign.subject || '件名の保持期間が過ぎています', topic: campaign.topic_display ?? campaign.topic ?? '—', created: formatTime(campaign.created_at), scheduled: campaign.scheduled_at ? formatTime(campaign.scheduled_at) : '', accepted: `${formatCount(campaign.counts?.accepted)} ／ ${formatCount(campaign.recipients_total)}`, problems: `${formatCount(campaign.counts?.failed)} ／ ${formatCount(campaign.counts?.unknown)}`, skipped: formatCount(campaign.counts?.skipped_blocked) };
 }
 
 export async function mount(ctx) {
@@ -20,7 +20,7 @@ export async function mount(ctx) {
           const row = historyRow(campaign);
           const link = element('a', `${row.topic} ／ ${row.title}`);
           link.href = `#/send/${campaign.campaign_id}`;
-          return [row.state, link, [row.created, row.scheduled].filter(Boolean).join(' ／ '), row.accepted, row.problems];
+          return [row.state, link, [row.created, row.scheduled].filter(Boolean).join(' ／ '), row.accepted, row.problems, row.skipped];
         }));
       } catch (error) { showMessage(root, errorText(error), true); }
     });

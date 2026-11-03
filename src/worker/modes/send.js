@@ -28,7 +28,7 @@ export async function send(event, runtime, context) {
   const chunk = campaign.progress.chunk;
   const start = i;
   const limiter = { interval: 1000 / Math.min(campaign.rate_per_sec, health.rate), next: Math.max(runtime.now(), held.next_send_at_ms ?? 0), ...(Number.isFinite(held.last_send_at_ms) ? { lastStart: held.last_send_at_ms } : {}) };
-  const pending = { accepted: 0, failed: 0, unknown: 0 };
+  const pending = { accepted: 0, failed: 0, unknown: 0, skipped_blocked: 0 };
   const results = [];
   let unknownRun = 0;
   let lastSendAt;
@@ -60,9 +60,9 @@ export async function send(event, runtime, context) {
     }
     const input = buildSendInput(campaign, lines[i].e, runtime);
     const result = await sender.trySend(input, limiter, sendContext);
-    if (['ACCEPTED', 'FAILED', 'UNKNOWN'].includes(result.type)) {
-      pending[result.type.toLowerCase()] += 1;
-      runtime.metrics.emit({ ACCEPTED: 'Accepted', FAILED: 'Failed', UNKNOWN: 'Unknown' }[result.type], 1);
+    if (['ACCEPTED', 'FAILED', 'UNKNOWN', 'SKIPPED'].includes(result.type)) {
+      pending[result.type === 'SKIPPED' ? 'skipped_blocked' : result.type.toLowerCase()] += 1;
+      if (result.type !== 'SKIPPED') runtime.metrics.emit({ ACCEPTED: 'Accepted', FAILED: 'Failed', UNKNOWN: 'Unknown' }[result.type], 1);
       if (result.type !== 'ACCEPTED') results.push({ e: lines[i].e, r: result.type, c: result.code, t: new Date(runtime.now()).toISOString() });
       if (result.type === 'ACCEPTED' || result.type === 'UNKNOWN') lastSendAt = new Date(limiter.lastStart).toISOString();
       if (result.type === 'UNKNOWN') unknownRun += 1;

@@ -244,7 +244,8 @@ test('snapshot後のローカル停止を送信直前に確認し、SESを呼び
   assert.equal((await f.request('POST /contacts/unsubscribe', { email: f.addresses[0], scope: 'news' })).statusCode, 200);
   await f.send();
   assert.equal(f.sends.length, 0);
-  assert.equal(f.getCampaign().counts.failed, 1);
+  assert.equal(f.getCampaign().counts.failed, 0);
+  assert.equal(f.getCampaign().counts.skipped_blocked, 1);
 });
 
 test('送信間隔の待機中に受け付けたローカル停止もAPI開始前に再確認する', async () => {
@@ -259,5 +260,6 @@ test('送信間隔の待機中に受け付けたローカル停止もAPI開始�
   await f.send();
   assert.equal(stopped, true);
   assert.equal(f.sends.length, 1);
-  assert.equal(f.getCampaign().counts.failed, 1);
+  assert.equal(f.getCampaign().counts.failed, 0);
+  assert.equal(f.getCampaign().counts.skipped_blocked, 1);
 });

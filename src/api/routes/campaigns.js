@@ -155,20 +155,54 @@ function executionArn(runtime, name) {
   return `${runtime.stateMachineArn.replace(':stateMachine:', ':execution:')}:${name}`;
 }
 
+async function describeStart(runtime, campaign) {
+  try {
+    const execution = await runtime.sfn.describeExecution({ executionArn: executionArn(runtime, campaign.start_execution_name ?? campaign.campaign_id) });
+    if (!execution || typeof execution.status !== 'string') throw new Error('Invalid execution response');
+    return execution;
+  } catch (error) {
+    if (error.name === 'ExecutionDoesNotExist') return null;
+    throw error;
+  }
+}
+
+async function getStartSchedule(runtime, campaign) {
+  try {
+    const schedule = await runtime.scheduler.getSchedule({ Name: campaign.schedule_name ?? `pl-${campaign.start_execution_name ?? campaign.campaign_id}`, GroupName: runtime.scheduleGroup });
+    if (!schedule || typeof schedule !== 'object') throw new Error('Invalid schedule response');
+    return schedule;
+  } catch (error) {
+    if (error.name === 'ResourceNotFoundException') return null;
+    throw error;
+  }
+}
+
+async function startFailure(runtime, campaign, code, absent) {
+  try {
+    await updateCampaign(runtime, campaign, [campaign.status], { status: absent ? 'APPROVED' : campaign.status, start_error: code }, absent ? ['execution_arn', 'schedule_name', 'scheduled_at'] : []);
+  } catch (error) { if (!conflict(error)) throw error; }
+  throw new AppError('MONITORING_UNAVAILABLE', 503, absent ? '開始処理を作成できませんでした。配信状態を読み込み直してください。' : '開始処理の有無を確認できません。再投入せず管理者が確認してください。');
+}
+
 async function nextStart(runtime, campaign) {
   const previous = campaign.start_attempt ?? 0;
   if (!Number.isSafeInteger(previous) || previous < 0 || previous >= Number.MAX_SAFE_INTEGER) throw new AppError('STATE_CONFLICT', 409, '開始回数を確認できません。');
   if (campaign.started_at || Object.values(campaign.counts ?? {}).some((count) => count > 0) || campaign.progress?.chunk > 0 || campaign.progress?.index > 0) throw new AppError('STATE_CONFLICT', 409, '送信履歴があるため新しい配信として開始できません。');
   if (campaign.start_error) {
-    const name = campaign.start_execution_name ?? campaign.campaign_id;
     let completed;
-    try { completed = await runtime.sfn.describeExecution({ executionArn: executionArn(runtime, name) }); } catch {
+    const creationFailed = ['START_EXECUTION_FAILED', 'CREATE_SCHEDULE_FAILED'].includes(campaign.start_error);
+    try {
+      if (campaign.start_error === 'CREATE_SCHEDULE_FAILED' && await getStartSchedule(runtime, campaign)) throw new Error('Schedule exists');
+      completed = await describeStart(runtime, campaign);
+    } catch {
       throw new AppError('STATE_CONFLICT', 409, '前回の開始処理の終了を確認できません。');
     }
-    let input;
-    let output;
-    try { input = JSON.parse(completed.input); output = JSON.parse(completed.output); } catch { /* 終了と未送信を確認できなければ再投入しない。 */ }
-    if (completed.status !== 'SUCCEEDED' || input?.campaign_id !== campaign.campaign_id || output?.campaign_id !== campaign.campaign_id || output?.result?.action !== 'START_FAILED') throw new AppError('STATE_CONFLICT', 409, '前回の開始処理の終了と未送信を確認できません。');
+    if (!creationFailed || completed) {
+      let input;
+      let output;
+      try { input = JSON.parse(completed?.input); output = JSON.parse(completed?.output); } catch { /* 終了と未送信を確認できなければ再投入しない。 */ }
+      if (completed?.status !== 'SUCCEEDED' || input?.campaign_id !== campaign.campaign_id || output?.campaign_id !== campaign.campaign_id || output?.result?.action !== 'START_FAILED') throw new AppError('STATE_CONFLICT', 409, '前回の開始処理の終了と未送信を確認できません。');
+    }
   }
   const start_attempt = Math.max(previous, campaign.start_error || campaign.start_mode ? 1 : 0) + 1;
   const start_execution_name = start_attempt === 1 ? campaign.campaign_id : `${campaign.campaign_id}-s${start_attempt}`;
@@ -182,12 +216,17 @@ async function start(ctx) {
   const health = await check(ctx, campaign, { scheduling: body.mode === 'SCHEDULED' });
   const attempt = await nextStart(runtime, campaign);
   if (body.mode === 'NOW') {
-    campaign = await updateCampaign(runtime, campaign, ['APPROVED'], { ...attempt, status: 'QUEUED', start_mode: 'NOW', started_by: user.sub, start_error: '' });
-    await startExecution(runtime, campaign, campaign.start_execution_name);
+    campaign = await updateCampaign(runtime, campaign, ['APPROVED'], { ...attempt, status: 'QUEUED', start_mode: 'NOW', started_by: user.sub, start_requested_at: timestamp(runtime), start_error: '' });
+    try { await startExecution(runtime, campaign, campaign.start_execution_name); } catch (error) {
+      if (error.code === 'STATE_CONFLICT') throw error;
+      let execution;
+      try { execution = await describeStart(runtime, campaign); } catch { return startFailure(runtime, campaign, 'START_EXECUTION_UNCONFIRMED', false); }
+      if (execution === null) return startFailure(runtime, campaign, 'START_EXECUTION_FAILED', true);
+    }
     return clean(campaign);
   }
   const schedule_name = `pl-${attempt.start_execution_name}`;
-  campaign = await updateCampaign(runtime, campaign, ['APPROVED'], { ...attempt, status: 'SCHEDULED', start_mode: 'SCHEDULED', scheduled_at: new Date(body.at).toISOString(), schedule_name, started_by: user.sub, start_error: '' });
+  campaign = await updateCampaign(runtime, campaign, ['APPROVED'], { ...attempt, status: 'SCHEDULED', start_mode: 'SCHEDULED', scheduled_at: new Date(body.at).toISOString(), schedule_name, started_by: user.sub, start_requested_at: timestamp(runtime), start_error: '' });
   const local = new Date(Date.parse(body.at) + 9 * 3600000).toISOString().slice(0, 19);
   const input = {
     Name: schedule_name, GroupName: runtime.scheduleGroup, ScheduleExpression: `at(${local})`, ScheduleExpressionTimezone: 'Asia/Tokyo',
@@ -195,8 +234,15 @@ async function start(ctx) {
     Target: { Arn: 'arn:aws:scheduler:::aws-sdk:sfn:startExecution', RoleArn: runtime.schedulerRoleArn, RetryPolicy: { MaximumRetryAttempts: 0 }, Input: JSON.stringify({ StateMachineArn: runtime.stateMachineArn, Name: campaign.start_execution_name, Input: JSON.stringify({ campaign_id: campaign.campaign_id }) }) },
   };
   try { await runtime.scheduler.createSchedule(input); } catch (error) {
-    if (error.name !== 'ConflictException') throw error;
-    const schedule = await runtime.scheduler.getSchedule({ Name: schedule_name, GroupName: runtime.scheduleGroup });
+    let schedule;
+    try { schedule = await getStartSchedule(runtime, campaign); } catch { return startFailure(runtime, campaign, 'CREATE_SCHEDULE_UNCONFIRMED', false); }
+    if (schedule === null) {
+      // 自動削除された予約から既に実行が始まっている可能性も確認する。
+      let execution;
+      try { execution = await describeStart(runtime, campaign); } catch { return startFailure(runtime, campaign, 'CREATE_SCHEDULE_UNCONFIRMED', false); }
+      if (execution !== null) return clean(await load(ctx));
+      return startFailure(runtime, campaign, 'CREATE_SCHEDULE_FAILED', true);
+    }
     if (schedule.ScheduleExpression !== input.ScheduleExpression || schedule.Target?.Input !== input.Target.Input || schedule.ScheduleExpressionTimezone !== 'Asia/Tokyo') throw new AppError('STATE_CONFLICT', 409, '予約内容が一致しません。');
   }
   return { ...clean(campaign), warnings: [...health.warnings, ...(local.slice(14, 16) === '00' ? ['ON_THE_HOUR'] : [])] };
@@ -320,8 +366,8 @@ async function testSend(ctx) {
       const input = buildSendInput(f ? { ...campaign, from: f.from, reply_to: f.reply_to } : campaign, email, { ...runtime, test: true, ...(f ? { simple: { subject: campaign.subject, text: f.text } } : {}) });
       const result = await sender.trySend(input, limiter, { owner, test: true, remainingTime: () => ctx.context.getRemainingTimeInMillis?.() ?? 29000, rate: health.rate });
       if (result.type !== 'UNKNOWN') campaign = await updateCampaign(runtime, campaign, [campaign.status], { test_holds: campaign.test_holds.filter((item) => item !== hash) });
-      results.push({ email_masked: maskEmail(email), status: ['ACCEPTED', 'UNKNOWN', 'FAILED'].includes(result.type) ? result.type : 'NOT_ATTEMPTED', ...(result.code ? { code: result.code } : {}) });
-      stop = !['ACCEPTED', 'FAILED'].includes(result.type);
+      results.push({ email_masked: maskEmail(email), status: ['ACCEPTED', 'UNKNOWN', 'FAILED', 'SKIPPED'].includes(result.type) ? result.type : 'NOT_ATTEMPTED', ...(result.code ? { code: result.code } : {}) });
+      stop = !['ACCEPTED', 'FAILED', 'SKIPPED'].includes(result.type);
     }
     await ctx.audit('TEST_SEND', campaign.campaign_id, { results, ...(recovery ? { purpose: ctx.body.purpose } : {}) });
     return { results };

@@ -16,7 +16,15 @@ import { marshall, unmarshall } from '../../common/ddb.js';
 function safeSesSpf(record) {
   const terms = record.toLowerCase().split(/\s+/).slice(1);
   const all = terms.filter((term) => /^[+?~-]?all(?:$|[:/=])/.test(term));
-  return terms.includes('include:amazonses.com') && all.length === 1 && ['~all', '-all'].includes(terms.at(-1));
+  const broad = terms.some((term) => {
+    if (/^[?~-]/.test(term)) return false;
+    const mechanism = term.replace(/^\+/, '');
+    const ip = /^(ip[46]):[^/]+\/(\d+)$/.exec(mechanism);
+    if (ip) return Number(ip[2]) < (ip[1] === 'ip4' ? 8 : 16);
+    const host = /^(?:a|mx)(?::[^/]+)?(?:\/(\d+))?(?:\/\/(\d+))?$/.exec(mechanism);
+    return host && (host[1] !== undefined && Number(host[1]) < 8 || host[2] !== undefined && Number(host[2]) < 16);
+  });
+  return !broad && terms.includes('include:amazonses.com') && all.length === 1 && ['~all', '-all'].includes(terms.at(-1));
 }
 
 export async function checkDns(runtime, identity) {
@@ -172,10 +180,35 @@ async function account(runtime) {
   if (!['BOUNCE', 'COMPLAINT'].every((reason) => value.SuppressionAttributes?.SuppressedReasons?.includes(reason))) await runtime.notify('SUPPRESSION_MISCONFIGURED', 'daily');
 }
 
+async function checkStartResources(runtime, campaign) {
+  let warning;
+  try {
+    const name = campaign.resume_count ? `${campaign.campaign_id}-r${campaign.resume_count}` : campaign.start_execution_name ?? campaign.campaign_id;
+    if (campaign.status === 'SCHEDULED') {
+      try {
+        const schedule = await runtime.scheduler.getSchedule({ Name: campaign.schedule_name ?? `pl-${name}`, GroupName: runtime.scheduleGroup });
+        if (!schedule || typeof schedule !== 'object') throw new Error('Invalid schedule response');
+        return;
+      } catch (error) { if (error.name !== 'ResourceNotFoundException') throw error; }
+    }
+    // 発火後に自動削除された予約と、作成されなかった予約を区別する。
+    const executionArn = campaign.execution_arn || `${runtime.stateMachineArn.replace(':stateMachine:', ':execution:')}:${name}`;
+    try {
+      const execution = await runtime.sfn.describeExecution({ executionArn });
+      if (!execution || typeof execution.status !== 'string') throw new Error('Invalid execution response');
+    } catch (error) {
+      if (error.name !== 'ExecutionDoesNotExist') throw error;
+      warning = campaign.status === 'QUEUED' ? 'QUEUED_EXECUTION_MISSING' : 'SCHEDULED_SCHEDULE_MISSING';
+    }
+  } catch { warning = 'START_CHECK_UNAVAILABLE'; }
+  if (warning) await runtime.notify(warning, campaign.campaign_id);
+}
+
 async function campaigns(runtime) {
   const config = await runtime.config.get();
   for await (const campaign of allRecords(runtime, 'CAMPAIGN')) {
     try {
+      if (['QUEUED', 'SCHEDULED'].includes(campaign.status) && runtime.now() - Date.parse(campaign.start_requested_at ?? campaign.updated_at ?? campaign.created_at) >= 900000) await checkStartResources(runtime, campaign);
       if (campaign.status === 'PAUSED' && runtime.now() - Date.parse(campaign.paused_at ?? campaign.updated_at) >= config.pause_timeout_days * 86400000 || ['QUEUED', 'SENDING'].includes(campaign.status) && runtime.now() - Date.parse(campaign.started_at) > config.max_pending_days * 86400000) {
         await updateCampaign(runtime, campaign, [campaign.status], { status: 'CANCELLED', cancel_reason: campaign.status === 'PAUSED' ? 'PAUSE_TIMEOUT' : 'MAX_PENDING_DAYS', completed_at: timestamp(runtime) });
         await runtime.record(campaign.campaign_id, 'CANCEL', 'EXPIRED');

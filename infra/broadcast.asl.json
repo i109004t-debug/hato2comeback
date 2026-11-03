@@ -194,7 +194,8 @@
       "Catch": [
         {
           "ErrorEquals": [
-            "DynamoDb.ConditionalCheckFailedException"
+            "DynamoDb.ConditionalCheckFailedException",
+            "DynamoDB.ConditionalCheckFailedException"
           ],
           "ResultPath": null,
           "Next": "SendBatch"

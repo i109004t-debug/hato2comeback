@@ -110,6 +110,7 @@ export function fromJstInput(value) {
 
 export const STATUS_LABELS = Object.freeze({ DRAFT: '下書き', PENDING_APPROVAL: '承認待ち', APPROVED: '承認済み', SCHEDULED: '予約済み', QUEUED: '開始待ち', SENDING: '送信中', PAUSED: '一時停止中', NEEDS_REVIEW: '要確認', COMPLETED: '完了', CANCELLED: '中止' });
 export const statusLabel = (status) => STATUS_LABELS[status] ?? '状態を確認できません';
+export const resultLabel = (result) => ({ ACCEPTED: '送信受付', FAILED: '失敗', UNKNOWN: '不明', SKIPPED: '停止済みのため送らなかった', NOT_ATTEMPTED: '未試行' })[result] ?? '要確認';
 
 export const PAUSE_LABELS = Object.freeze({ USER: '運営スタッフの操作で停止しました。', OPERATOR_SWITCH: '全体の停止スイッチが入っています。', REPUTATION_ALARM: 'バウンス率や苦情率の警報が出ています。', CAMPAIGN_BOUNCE: 'この配信のバウンス率が高くなっています。', CAMPAIGN_DELAY: 'この配信の配送遅延率が高くなっています。', EVENTS_MISSING: '配送の記録が届いていません。', EVENT_LOG_STALE: '配送の記録が遅れています。', MONITORING_UNAVAILABLE: '監視の状態を確認できません。', CONTENT_ERROR: '固定した本文の処理に異常があります。', AUTH_CHECK: '送信元ドメインの認証を確認できません。', SES_PAUSED: 'SESが送信を止めています。', SES_UNSTABLE: 'SESの応答が不安定です。', QUOTA: 'SESの24時間の送信枠が足りません。' });
 
@@ -119,6 +120,7 @@ export function progressLines(campaign, stats = {}) {
   return [
     ['送信済み（SES受付・送信処理の集計）／総数', `${formatCount(counts.accepted)} ／ ${formatCount(campaign.recipients_total)}`],
     ['失敗', formatCount(counts.failed)], ['不明', formatCount(counts.unknown)],
+    ['停止済みのため送らなかった', formatCount(counts.skipped_blocked)],
     ['許可リストによる除外', formatCount(counts.excluded_allowlist)],
     ['SES受付（イベントの集計）', formatCount(metrics.Send)],
     ...[['配送', 'Delivery'], ['配送遅延', 'DeliveryDelay'], ['バウンス', 'Bounce'], ['苦情', 'Complaint'], ['購読設定の変更', 'Subscription'], ['SES内部の拒否', 'Reject'], ['テンプレートの失敗', 'RenderingFailure']].map(([label, key]) => [label, formatCount(metrics[key])]),

@@ -154,6 +154,7 @@ const apiOperations = {
   cognito: 'AdminGetUser AdminListGroupsForUser', cloudwatch: 'GetMetricData DescribeAlarms', ssm: 'GetParameter', secrets: 'GetSecretValue', lambda: 'Invoke',
 };
 const workerOperations = {
+  sfn: 'DescribeExecution', scheduler: 'GetSchedule',
   ses: 'GetAccount GetEmailIdentity GetConfigurationSet GetConfigurationSetEventDestinations GetContactList ListContacts SendEmail CreateImportJob GetImportJob DeleteEmailTemplate',
   ddb: 'GetItem PutItem UpdateItem Query BatchGetItem', s3: 'PutObject GetObject HeadObject', cloudwatch: 'GetMetricData DescribeAlarms', sns: 'Publish', ssm: 'GetParameter', secrets: 'GetSecretValue',
 };
@@ -175,6 +176,16 @@ for (const [name, operations] of [['Api',apiOperations],['Worker',workerOperatio
 test('12.6 aws.jsの全SDK操作が少なくとも一方のIAM照合に含まれる', () => {
   for (const [service, {operations}] of Object.entries(AWS_APIS)) for (const op of operations) assert.ok([apiOperations,workerOperations].some((x) => x[service]?.split(' ').includes(op)), `${service}.${op}`);
   assert.match(read('src/api/routes/imports.js'), /TransactItems: \[\s*\{ Put:[\s\S]*?\{ Put:/);
+});
+
+test('12.6 開始照合の読取権限はAPI・workerの同環境の実行と予約だけに限定する', () => {
+  for (const policy of [resources.ApiPolicy, resources.WorkerPolicy]) {
+    assert.match(policy, /Action: \['states:DescribeExecution'\]\n\s+Resource: !Sub 'arn:\$\{AWS::Partition\}:states:\$\{AWS::Region\}:\$\{AWS::AccountId\}:execution:postline-\$\{Env\}:\*'/);
+    assert.match(policy, /Action: \[[^\]\n]*'scheduler:GetSchedule'[^\]\n]*\]\n\s+Resource: !Sub 'arn:\$\{AWS::Partition\}:scheduler:\$\{AWS::Region\}:\$\{AWS::AccountId\}:schedule\/postline-\$\{Env\}\/pl-\*'/);
+  }
+  assert.doesNotMatch(resources.StateMachinePolicy, /states:DescribeExecution|scheduler:GetSchedule/);
+  assert.match(resources.WorkerFunction, /STATE_MACHINE_ARN:/);
+  assert.match(resources.WorkerFunction, /SCHEDULE_GROUP:/);
 });
 
 test('12.6 共通拒否・固定テンプレート・監査ログの拒否とSendEmailのリソース制限', () => {

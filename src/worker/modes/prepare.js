@@ -92,7 +92,7 @@ export async function prepare(event, runtime) {
       await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: `recipients/${id}/${String(chunk).padStart(5, '0')}.jsonl`, ContentType: 'application/x-ndjson', Body: shuffled.slice(chunk * health.config.batch_size, (chunk + 1) * health.config.batch_size).map((item) => JSON.stringify(item)).join('\n') + '\n' });
     }
     progress = { chunk: 0, index: 0 };
-    counts = { accepted: 0, failed: 0, unknown: 0, excluded_allowlist: excluded };
+    counts = { accepted: 0, failed: 0, unknown: 0, skipped_blocked: 0, excluded_allowlist: excluded };
   }
   // 長いスナップショット作成後に期限切れの検査結果で送信を許可しない。
   health = await runtime.precheck.run({ campaign, allowedStatuses: ['QUEUED'], remaining: recipientsTotal, recent: false });

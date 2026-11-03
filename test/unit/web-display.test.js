@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { maskAddress, visibleAddress, isMasked, formatCount, formatTime, jstInput, fromJstInput, statusLabel, progressLines, createActionGate, startPolling } from '../../web/js/dom.js';
+import { maskAddress, visibleAddress, isMasked, formatCount, formatTime, jstInput, fromJstInput, statusLabel, resultLabel, progressLines, createActionGate, startPolling } from '../../web/js/dom.js';
 import { defaultSchedule, scheduleInput, isOnTheHour, hasShortUrl, validateDraft, draftFooter, reviewInput } from '../../web/js/views/send.js';
 import { consentInput, contactInput, topicSummary, importReason } from '../../web/js/views/contacts.js';
 import { settingsInput, deliveryInput, DELIVERY_CASES } from '../../web/js/views/settings.js';
@@ -44,6 +44,18 @@ test('9.2 日時は日本時間で表示し、入力も日本時間として解�
   assert.equal(fromJstInput('2026-11-03T00:05'), '2026-11-03T00:05:00+09:00');
   assert.equal(fromJstInput('2026-02-30T09:00'), null);
   assert.equal(fromJstInput('2026-11-03T24:00'), null);
+});
+
+test('8.1・8.2 停止済みの未送信を失敗と分けて詳細・履歴・一覧に表示する', () => {
+  const campaign = { recipients_total: 10, counts: { accepted: 6, failed: 1, unknown: 1, skipped_blocked: 2 } };
+  const lines = Object.fromEntries(progressLines(campaign));
+  assert.equal(lines['失敗'], '1');
+  assert.equal(lines['停止済みのため送らなかった'], '2');
+  assert.equal(historyRow(campaign).problems, '1 ／ 1');
+  assert.equal(historyRow(campaign).skipped, '2');
+  assert.equal(resultLabel('SKIPPED'), '停止済みのため送らなかった');
+  assert.equal(resultLabel('FAILED'), '失敗');
+  assert.equal(resultLabel('UNKNOWN'), '不明');
 });
 
 test('7.1 予約の既定は05分で、常に5分以上後', () => {

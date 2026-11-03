@@ -1,5 +1,5 @@
 import { ApiError, errorText, isUncertainMutation } from '../api.js';
-import { clone, setText, on, element, fillSelect, tableRows, showMessage, previewDialog, confirmDialog, hasRole, visibleAddress, formatCount, formatTime, jstInput, fromJstInput, statusLabel, PAUSE_LABELS, progressLines, createActionGate, startPolling } from '../dom.js';
+import { clone, setText, on, element, fillSelect, tableRows, showMessage, previewDialog, confirmDialog, hasRole, visibleAddress, formatCount, formatTime, jstInput, fromJstInput, statusLabel, resultLabel, PAUSE_LABELS, progressLines, createActionGate, startPolling } from '../dom.js';
 
 const canSend = (user) => hasRole(user, 'admin', 'sender');
 const canOperate = (user) => hasRole(user, 'admin', 'sender', 'approver');
@@ -126,7 +126,12 @@ export async function mount(ctx, id) {
     const notes = [];
     if (campaign.status === 'COMPLETED') notes.push('送信処理が終了しました。失敗・不明・配信停止による除外が含まれる場合があります。下の集計を確認してください。受信トレイへの到達を保証する表示ではありません。');
     if (campaign.pause_reason) notes.push(PAUSE_LABELS[campaign.pause_reason] ?? '停止理由を確認できません。管理者に確認してください。');
-    if (campaign.start_error) notes.push(errorText(new ApiError(campaign.start_error)));
+    if (campaign.start_error) notes.push({
+      START_EXECUTION_FAILED: '開始処理を作成できませんでした。配信は承認済みに戻っています。',
+      CREATE_SCHEDULE_FAILED: '予約を作成できませんでした。配信は承認済みに戻っています。',
+      START_EXECUTION_UNCONFIRMED: '要確認：開始処理の有無を確認できません。管理者が確認してください。',
+      CREATE_SCHEDULE_UNCONFIRMED: '要確認：予約の有無を確認できません。管理者が確認してください。',
+    }[campaign.start_error] ?? errorText(new ApiError(campaign.start_error)));
     if (campaign.reject_reason) notes.push(`差戻しの理由：${campaign.reject_reason}`);
     if (campaign.scheduled_at && campaign.status === 'SCHEDULED') notes.push(`予約日時：${formatTime(campaign.scheduled_at)}`);
     if (stale) notes.push('他の人が先に操作しました。入力内容を控えてから画面を読み込み直してください。');
@@ -203,7 +208,7 @@ export async function mount(ctx, id) {
     q('[data-failures-next]').disabled = true;
     try {
       const page = await ctx.api.request(`/campaigns/${campaign.campaign_id}/failures`, { query: { limit: 50, cursor } });
-      tableRows(q('[data-failures]'), page.items.map((item) => [visibleAddress(item.e, ctx.user), item.r === 'UNKNOWN' ? '不明' : item.r === 'FAILED' ? '失敗' : item.r, item.c, formatTime(item.t)]));
+      tableRows(q('[data-failures]'), page.items.map((item) => [visibleAddress(item.e, ctx.user), resultLabel(item.r), item.c, formatTime(item.t)]));
       failureCursor = page.cursor;
       failurePageCursor = cursor;
       q('[data-failures-section]').hidden = false;
@@ -304,8 +309,8 @@ export async function mount(ctx, id) {
       const body = testSendInput(ctx.user, q('[data-recovery]').checked, q('[data-recovery-note]').value);
       if (body.purpose && !await confirmDialog('受入確認の再検証として、設定のテスト送信先だけに送ります。理由を監査記録に残します。')) return;
       const result = await ctx.api.request(`/campaigns/${campaign.campaign_id}/test-send`, { method: 'POST', body });
-      const labels = { ACCEPTED: '送信受付', FAILED: '失敗', UNKNOWN: '不明（送り直しません）', NOT_ATTEMPTED: '未試行' };
-      showMessage(root, `テスト送信の結果\n${result.results.map((item) => `${visibleAddress(item.email_masked, ctx.user)}：${labels[item.status] ?? '要確認'}${item.code === 'PRIOR_UNKNOWN' ? '（前回の結果が不明のため送り直しません）' : ''}`).join('\n')}`);
+      const labels = { UNKNOWN: '不明（送り直しません）' };
+      showMessage(root, `テスト送信の結果\n${result.results.map((item) => `${visibleAddress(item.email_masked, ctx.user)}：${labels[item.status] ?? resultLabel(item.status)}${item.code === 'PRIOR_UNKNOWN' ? '（前回の結果が不明のため送り直しません）' : ''}`).join('\n')}`);
     }, { mutation: true });
   });
   on(root, '[data-confirm-content]', 'change', render);

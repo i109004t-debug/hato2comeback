@@ -169,7 +169,7 @@ test('7.1 StartExecutionの応答消失後はQUEUEDを保ち別名で再投入�
   const f = managementFixture(); f.setCampaign({ status: 'APPROVED' });
   const send = f.deps.sfn.startExecution;
   f.deps.sfn.startExecution = async (input) => { await send(input); throw failure('TimeoutError'); };
-  expectCode(await f.request(`POST ${f.campaignPath}/start`, { mode: 'NOW' }), 500, 'INTERNAL');
+  assert.equal((await f.request(`POST ${f.campaignPath}/start`, { mode: 'NOW' })).statusCode, 200);
   expectCode(await f.request(`POST ${f.campaignPath}/start`, { mode: 'NOW' }), 409, 'STATE_CONFLICT');
   assert.equal(f.getCampaign().status, 'QUEUED'); assert.equal(f.getCampaign().start_attempt, 1);
   assert.equal(f.executions.size, 1); assert.equal(f.sends.length, 0);
