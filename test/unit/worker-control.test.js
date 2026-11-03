@@ -131,9 +131,10 @@ test('7.7 S3読取障害でもMarkReviewはスナップショット記録から2
   await f.finish('REVIEW'); assert.deepEqual(f.getCampaign().review, { chunk: 0, index_from: 20, index_to: 22, reason: 'WORKER_FAILED' });
 });
 
-test('handlerはimport/dailyを未実装として明確に拒否し、未知モードを受理しない', async () => {
+test('handlerは不正な取込IDと未知モードを受理しない', async () => {
   const f = fixture();
-  for (const mode of ['import', 'daily']) await assert.rejects(f.handler({ mode }), (error) => error.code === 'INTERNAL' && /未実装/.test(error.message));
+  await assert.rejects(f.handler({ mode: 'import' }), { code: 'INVALID_REQUEST' });
+  assert.deepEqual(await f.handler({ mode: 'import', import_id: ID }), { status: 'NOT_FOUND' });
   await assert.rejects(f.handler({ mode: 'bad' }), { code: 'INVALID_REQUEST' });
 });
 

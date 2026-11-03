@@ -13,6 +13,9 @@ import { AppError, invalid } from '../common/http.js';
 import { prepare } from './modes/prepare.js';
 import { send } from './modes/send.js';
 import { finish } from './modes/finish.js';
+import { importContacts } from './modes/import.js';
+import { daily } from './modes/daily.js';
+import { createContactLock } from '../common/contact-lock.js';
 
 export function createHandler(deps = {}) {
   const environment = deps.environment ?? process.env;
@@ -41,6 +44,7 @@ export function createHandler(deps = {}) {
     };
     runtime.ses = deps.sesControl ?? createSesv2(runtime);
     runtime.lock ??= createSendLock(runtime);
+    runtime.contactLock ??= createContactLock(runtime);
     runtime.precheck ??= createPrecheck(runtime);
     return runtime;
   };
@@ -48,7 +52,11 @@ export function createHandler(deps = {}) {
     const logger = deps.logger ?? createLogger({ fn: 'worker', req_id: context.awsRequestId, now: base.now });
     try {
       if (!event || !['prepare', 'send', 'finish', 'import', 'daily'].includes(event.mode)) throw invalid('mode');
-      if (event.mode === 'import' || event.mode === 'daily') throw new AppError('INTERNAL', 500, 'このモードは未実装です。');
+      if (event.mode === 'daily') return await daily(event, initialize(context), context);
+      if (event.mode === 'import') {
+        if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(event.import_id ?? '')) throw invalid('import_id');
+        return await importContacts(event, initialize(context), context);
+      }
       if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(event.campaign_id ?? '') || typeof event.execution_arn !== 'string' || !event.execution_arn.startsWith('arn:aws:states:') || event.execution_arn.includes('@')) throw invalid('execution');
       const services = initialize(context);
       if (event.mode === 'prepare') return await prepare(event, services, context);

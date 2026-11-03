@@ -36,7 +36,16 @@ export async function send(event, runtime, context) {
   const sendContext = { owner: id, campaignId: id, executionArn, rate: campaign.rate_per_sec, remaining: 1, checkRatios: chunk % 5 === 0, remainingTime: () => context.getRemainingTimeInMillis() };
   const checkpoint = async (nextChunk, index, extra = {}) => {
     // 結果を先に保存する。S3障害時は未保存の進捗を要確認範囲に含める。
-    if (results.length) await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: `results/${id}/${String(chunk).padStart(5, '0')}-${String(start).padStart(3, '0')}.jsonl`, ContentType: 'application/x-ndjson', Body: results.map((item) => JSON.stringify(item)).join('\n') + '\n' });
+    if (results.length) {
+      const key = `results/${id}/${String(chunk).padStart(5, '0')}-${String(start).padStart(3, '0')}.jsonl`;
+      if (!campaign.result_keys?.includes(key)) {
+        // S3成功後に進捗更新が失敗しても、APIから証跡を見つけられるよう先に登録する。
+        const latest = await runtime.store.get('CAMPAIGN', id);
+        campaign = await change(runtime, id, executionArn, ['SENDING', 'PAUSED', 'CANCELLED', 'NEEDS_REVIEW'], { result_keys: [...new Set([...(latest.result_keys ?? []), key])] });
+      }
+      await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: key, ContentType: 'application/x-ndjson', Body: results.map((item) => JSON.stringify(item)).join('\n') + '\n' });
+      extra.result_keys = [...new Set([...(campaign.result_keys ?? []), key])];
+    }
     campaign = await flush(runtime, id, executionArn, { chunk: nextChunk, index }, pending, limiter, lastSendAt, { ...extra, sender_state: sender.getState() });
     return currentAction(campaign, executionArn);
   };

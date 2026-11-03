@@ -6,6 +6,7 @@ export const METRIC_UNITS = Object.freeze({
   Paused: 'Count', NeedsReview: 'Count', StartFailed: 'Count', PrepareRecipients: 'Count', PrepareSeconds: 'Seconds',
   SesBusy: 'Count', ImportRows: 'Count', ImportSkipped: 'Count', ImportRejected: 'Count',
   ApiError4xx: 'Count', ApiError5xx: 'Count', ApiLatencyMs: 'Milliseconds',
+  SesSendingEnabled: 'None', SesMax24HourSend: 'Count', SesSentLast24Hours: 'Count', SesMaxSendRate: 'Count/Second',
 });
 const reasons = ['USER', 'OPERATOR_SWITCH', 'REPUTATION_ALARM', 'CAMPAIGN_BOUNCE', 'CAMPAIGN_DELAY', 'EVENTS_MISSING', 'EVENT_LOG_STALE', 'MONITORING_UNAVAILABLE', 'CONTENT_ERROR', 'AUTH_CHECK', 'SES_PAUSED', 'SES_UNSTABLE', 'QUOTA'];
 

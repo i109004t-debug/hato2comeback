@@ -92,7 +92,26 @@ export function memoryDdb() {
     },
     async query(input) {
       const pk = input.ExpressionAttributeValues[':pk'].S;
-      return { Items: [...items.values()].filter((item) => item.PK === pk).map(marshall) };
+      let rows = [...items.values()].filter((item) => item.PK === pk).sort((a, b) => a.SK.localeCompare(b.SK));
+      if (input.ScanIndexForward === false) rows.reverse();
+      if (input.ExclusiveStartKey) { const start = unmarshall(input.ExclusiveStartKey); rows = rows.slice(rows.findIndex((row) => row.SK === start.SK) + 1); }
+      const page = rows.slice(0, input.Limit ?? rows.length);
+      return { Items: page.map(marshall), ...(page.length < rows.length ? { LastEvaluatedKey: marshall({ PK: pk, SK: page.at(-1).SK }) } : {}) };
+    },
+    async batchGetItem(input) {
+      const Responses = {};
+      for (const [table, request] of Object.entries(input.RequestItems)) {
+        assert.equal(request.ConsistentRead, true);
+        assert.ok(request.Keys.length <= 100);
+        Responses[table] = request.Keys.flatMap((key) => { const item = items.get(name(unmarshall(key))); return item ? [marshall(item)] : []; });
+      }
+      return { Responses };
+    },
+    async transactWriteItems(input) {
+      const puts = input.TransactItems.map((item) => item.Put);
+      if (puts.some((put) => !expression(put, items.get(name(unmarshall(put.Item))) ?? {}))) throw failure('TransactionCanceledException', 400);
+      puts.forEach((put) => { api.set(unmarshall(put.Item)); calls.push(structuredClone(put)); });
+      return {};
     },
   };
   return api;

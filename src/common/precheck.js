@@ -11,7 +11,7 @@ export const DELIVERY_CASES = ['T-25', 'T-26', 'T-27', 'T-28', 'T-30', 'T-31', '
 const stable = (value) => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map((name) => [name, item[name]])) : item);
 let codeHash;
 export function sendingConfigHash(settings) {
-  codeHash ??= createHash('sha256').update(['email.js', 'footer.js', 'sender.js', 'precheck.js'].map((file) => readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n')).digest('hex');
+  codeHash ??= createHash('sha256').update(['aws.js', 'email.js', 'footer.js', 'sender.js', 'precheck.js', 'acceptance.js', '../api/routes/campaigns.js', '../worker/modes/daily.js'].map((file) => readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n')).digest('hex');
   return createHash('sha256').update(stable({ ...settings, codeHash })).digest('hex');
 }
 

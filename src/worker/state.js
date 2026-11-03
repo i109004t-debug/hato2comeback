@@ -49,6 +49,7 @@ export async function flush(runtime, campaignId, executionArn, progress, pending
     const counts = { ...current.counts };
     for (const field of ['accepted', 'failed', 'unknown']) counts[field] = (counts[field] ?? 0) + pending[field];
     try {
+      if (extra.result_keys) extra.result_keys = [...new Set([...(current.result_keys ?? []), ...extra.result_keys])];
       const saved = await runtime.store.update('CAMPAIGN', campaignId, {
         ConditionExpression,
         ...buildUpdate({ set: { ...extra, progress, counts, version: current.version + 1, updated_at: new Date(runtime.now()).toISOString(), ...(lastSendAt ? { last_send_at: lastSendAt } : {}) } }, expressions),
@@ -69,7 +70,7 @@ export function currentAction(campaign, executionArn) {
 }
 
 export async function pause(runtime, campaignId, executionArn, reason, code = reason, limiter) {
-  const saved = await change(runtime, campaignId, executionArn, ['SENDING'], { status: 'PAUSED', pause_reason: reason });
+  const saved = await change(runtime, campaignId, executionArn, ['SENDING'], { status: 'PAUSED', pause_reason: reason, paused_at: new Date(runtime.now()).toISOString() });
   if (saved?.execution_arn === executionArn) await runtime.lock.release(campaignId, limiter);
   if (saved?.status === 'PAUSED' && saved.pause_reason === reason) {
     runtime.metrics.emit('Paused', 1, { Reason: reason });
