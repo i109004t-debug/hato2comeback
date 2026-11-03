@@ -1,0 +1,319 @@
+{
+  "Comment": "Postline 7.2 Standard workflow; only rejected Lambda invocations may retry.",
+  "StartAt": "Prepare",
+  "States": {
+    "Prepare": {
+      "Type": "Task",
+      "Resource": "${WorkerFunctionArn}",
+      "Parameters": {
+        "mode": "prepare",
+        "campaign_id.$": "$.campaign_id",
+        "execution_arn.$": "$$.Execution.Id",
+        "input.$": "$"
+      },
+      "ResultPath": "$.result",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "MarkFailure"
+        }
+      ],
+      "Next": "Route"
+    },
+    "SendBatch": {
+      "Type": "Task",
+      "Resource": "${WorkerFunctionArn}",
+      "Parameters": {
+        "mode": "send",
+        "campaign_id.$": "$.campaign_id",
+        "execution_arn.$": "$$.Execution.Id"
+      },
+      "ResultPath": "$.result",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "MarkFailure"
+        }
+      ],
+      "Next": "Route"
+    },
+    "Route": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.result.action",
+          "StringEquals": "SEND",
+          "Next": "SendBatch"
+        },
+        {
+          "Variable": "$.result.action",
+          "StringEquals": "WAIT_LOCK",
+          "Next": "WaitLock"
+        },
+        {
+          "Variable": "$.result.action",
+          "StringEquals": "WAIT_DAY",
+          "Next": "WaitDay"
+        },
+        {
+          "Variable": "$.result.action",
+          "StringEquals": "THROTTLED",
+          "Next": "Throttled"
+        },
+        {
+          "Variable": "$.result.action",
+          "StringEquals": "PAUSED",
+          "Next": "WaitForResume"
+        },
+        {
+          "Variable": "$.result.action",
+          "StringEquals": "DONE",
+          "Next": "Finish"
+        },
+        {
+          "Variable": "$.result.action",
+          "StringEquals": "CANCELLED",
+          "Next": "Finish"
+        },
+        {
+          "Variable": "$.result.action",
+          "StringEquals": "START_FAILED",
+          "Next": "Finish"
+        },
+        {
+          "Variable": "$.result.action",
+          "StringEquals": "REVIEW",
+          "Next": "MarkReview"
+        }
+      ],
+      "Default": "MarkFailure"
+    },
+    "WaitLock": {
+      "Type": "Wait",
+      "Seconds": 300,
+      "Next": "LockPhase"
+    },
+    "LockPhase": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.result.phase",
+          "StringEquals": "prepare",
+          "Next": "Prepare"
+        },
+        {
+          "Variable": "$.result.phase",
+          "StringEquals": "send",
+          "Next": "SendBatch"
+        }
+      ],
+      "Default": "MarkFailure"
+    },
+    "WaitDay": {
+      "Type": "Wait",
+      "SecondsPath": "$.result.wait_seconds",
+      "Next": "SendBatch"
+    },
+    "Throttled": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "SendBatch"
+    },
+    "WaitForResume": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:updateItem.waitForTaskToken",
+      "Parameters": {
+        "TableName": "${TableName}",
+        "Key": {
+          "PK": {
+            "S": "CAMPAIGN"
+          },
+          "SK": {
+            "S.$": "$.campaign_id"
+          }
+        },
+        "UpdateExpression": "SET #token = :token, #updated = :now ADD #version :one",
+        "ConditionExpression": "#status = :paused AND #version = :version AND #execution = :execution",
+        "ExpressionAttributeNames": {
+          "#token": "task_token",
+          "#updated": "updated_at",
+          "#status": "status",
+          "#version": "version",
+          "#execution": "execution_arn"
+        },
+        "ExpressionAttributeValues": {
+          ":token": {
+            "S.$": "$$.Task.Token"
+          },
+          ":now": {
+            "S.$": "$$.State.EnteredTime"
+          },
+          ":paused": {
+            "S": "PAUSED"
+          },
+          ":one": {
+            "N": "1"
+          },
+          ":version": {
+            "N.$": "States.Format('{}', $.result.version)"
+          },
+          ":execution": {
+            "S.$": "$$.Execution.Id"
+          }
+        }
+      },
+      "TimeoutSeconds": 604800,
+      "ResultPath": null,
+      "Next": "SendBatch",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "DynamoDB.ConditionalCheckFailedException"
+          ],
+          "ResultPath": null,
+          "Next": "SendBatch"
+        },
+        {
+          "ErrorEquals": [
+            "States.Timeout",
+            "Cancelled"
+          ],
+          "ResultPath": null,
+          "Next": "CancelResult"
+        },
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "MarkFailure"
+        }
+      ]
+    },
+    "CancelResult": {
+      "Type": "Pass",
+      "Result": {
+        "action": "CANCELLED"
+      },
+      "ResultPath": "$.result",
+      "Next": "Finish"
+    },
+    "Finish": {
+      "Type": "Task",
+      "Resource": "${WorkerFunctionArn}",
+      "Parameters": {
+        "mode": "finish",
+        "campaign_id.$": "$.campaign_id",
+        "execution_arn.$": "$$.Execution.Id",
+        "outcome.$": "$.result.action",
+        "result.$": "$.result"
+      },
+      "ResultPath": "$.result",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "MarkFailure"
+        }
+      ],
+      "Next": "FinishRoute"
+    },
+    "FinishRoute": {
+      "Type": "Choice",
+      "Choices": [
+        { "Variable": "$.result.action", "StringEquals": "PAUSED", "Next": "WaitForResume" },
+        { "Variable": "$.result.action", "StringEquals": "REVIEW", "Next": "MarkReview" },
+        { "Variable": "$.result.action", "StringEquals": "DONE", "Next": "Finished" },
+        { "Variable": "$.result.action", "StringEquals": "CANCELLED", "Next": "Finished" },
+        { "Variable": "$.result.action", "StringEquals": "START_FAILED", "Next": "Finished" }
+      ],
+      "Default": "MarkFailure"
+    },
+    "Finished": {
+      "Type": "Succeed"
+    },
+    "MarkFailure": {
+      "Type": "Pass",
+      "Result": {
+        "action": "REVIEW",
+        "reason": "WORKER_FAILED"
+      },
+      "ResultPath": "$.result",
+      "Next": "MarkReview"
+    },
+    "MarkReview": {
+      "Type": "Task",
+      "Resource": "${WorkerFunctionArn}",
+      "Parameters": {
+        "mode": "finish",
+        "campaign_id.$": "$.campaign_id",
+        "execution_arn.$": "$$.Execution.Id",
+        "outcome": "REVIEW",
+        "result.$": "$.result"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 5,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "ResultPath": null,
+          "Next": "Failed"
+        }
+      ],
+      "End": true
+    },
+    "Failed": {
+      "Type": "Fail",
+      "Error": "INTERNAL",
+      "Cause": "Review finalization failed"
+    }
+  }
+}

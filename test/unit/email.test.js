@@ -36,7 +36,8 @@ test('9.3 閲覧者用の伏せ字', () => {
 test('6.8 RFC 2047: 各語75文字以下でUTF-8を文字境界で分割', () => {
   for (const source of ['日本語の表示名', 'あ'.repeat(64), '😀あA𠮷'.repeat(60), 'a'.repeat(201), '']) {
     const encoded = encodeRfc2047(source);
-    const words = encoded ? encoded.split(/\r\n /) : [];
+    assert.doesNotMatch(encoded, /[\r\n]/);
+    const words = encoded ? encoded.split(' ') : [];
     let decoded = '';
     for (const word of words) {
       assert.ok(word.length <= 75);

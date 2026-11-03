@@ -46,7 +46,7 @@ export function encodeRfc2047(text) {
     bytes += size;
   }
   if (chunk) chunks.push(chunk);
-  return chunks.map((value) => `=?UTF-8?B?${Buffer.from(value).toString('base64')}?=`).join('\r\n ');
+  return chunks.map((value) => `=?UTF-8?B?${Buffer.from(value).toString('base64')}?=`).join(' ');
 }
 
 export function formatFrom(name, local, domain) {
