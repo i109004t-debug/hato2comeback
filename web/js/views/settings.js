@@ -12,11 +12,12 @@ export function settingsInput(input, version) {
 }
 
 export function deliveryInput(input) {
-  const cases = Object.fromEntries(DELIVERY_CASES.map((id) => [id, input[id]]));
-  if (!['true', 'false'].includes(input.passed) || !input.note?.trim() || !/^delivery-checks\/[A-Za-z0-9/_.-]+$/.test(input.evidence_key ?? '') || input.evidence_key.split('/').includes('..') || !/^[a-f0-9]{64}$/.test(input.config_hash ?? '') || !/^[a-f0-9]{64}$/.test(input.dns_config_hash ?? '') || Object.values(cases).some((value) => !['PASS', 'FAIL'].includes(value))) throw new ApiError('INVALID_REQUEST', 400, '', ['受信確認の記録']);
-  if (input.passed === 'true' && Object.values(cases).some((value) => value !== 'PASS')) throw new ApiError('DELIVERY_CHECK_REQUIRED');
-  return { passed: input.passed === 'true', note: input.note.trim(), evidence_key: input.evidence_key, cases, config_hash: input.config_hash, dns_config_hash: input.dns_config_hash };
+  if (!input.note?.trim() || [...input.note].length > 1000) throw new ApiError('INVALID_REQUEST', 400, '', ['受入確認の記録']);
+  return { note: input.note.trim() };
 }
+
+export const INVALIDATION_LABELS = Object.freeze({ CONFIG_CHANGED: '送信の設定かプログラムが変わったため', DNS_CHANGED: 'DNSの設定が変わったため', AUTH_CHECK_FAILED: '送信元の認証の確認で問題が見つかったため', EXPIRED: '確認から90日を過ぎたため' });
+const DNS_LABELS = Object.freeze({ DKIM: 'DKIM', FROM_SPF: '差出人のSPF', MAIL_FROM_SPF: 'MAIL FROMのSPF', MAIL_FROM_MX: 'MAIL FROMのMX', FROM_A: '差出人のA', FROM_MX: '差出人のMX', DMARC: 'DMARC' });
 
 export async function mount(ctx) {
   const root = clone('settings-template');
@@ -27,23 +28,19 @@ export async function mount(ctx) {
   let auditCursor;
   let auditMonth;
   let conflict = false;
+  let acceptance;
+  let selectedCheck;
   const admin = () => hasRole(ctx.user, 'admin');
   const form = q('[data-settings]');
-  for (const id of DELIVERY_CASES) {
-    const label = element('label', id);
-    const select = element('select'); select.name = id;
-    fillSelect(select, [['FAIL', '未確認・不合格'], ['PASS', '合格']]);
-    label.append(select); q('[data-cases]').append(label);
-  }
   q('[data-audit-form]').elements.month.value = new Date().toISOString().slice(0, 7);
 
   function permissions() {
     q('[data-fields]').disabled = !admin() || gate.busy || conflict;
-    q('[data-delivery-form]').hidden = !admin();
+    q('[data-acceptance]').hidden = !admin();
     q('[data-audit-area]').hidden = !admin();
-    for (const control of q('[data-delivery-form]').elements) control.disabled = !admin() || gate.busy || conflict;
+    for (const control of q('[data-acceptance]').querySelectorAll('button, input, select, textarea')) control.disabled = !admin() || gate.busy || conflict;
     q('[data-audit-next]').disabled = gate.busy || !auditCursor;
-    setText(root, '[data-role-note]', admin() ? '管理者として組織設定を編集できます。スタッフのアカウント・役割の変更はAWSの管理者が行います。' : '設定の閲覧だけができます。変更は管理者が行います。');
+    setText(root, '[data-role-note]', admin() ? '組織設定と受入確認を管理できます。アカウントの変更は「スタッフ」で行います。' : '設定の閲覧だけができます。変更は管理者が行います。');
     setText(root, '[data-domain]', `送信元ドメイン：${ctx.config.senderDomain}（構築時に固定）`);
   }
 
@@ -77,16 +74,61 @@ export async function mount(ctx) {
       populate(); showMessage(root, '組織設定を保存しました。');
     }, true);
   });
-  q('[data-delivery-form]').addEventListener('submit', (event) => {
-    event.preventDefault();
-    if (!admin() || conflict) return;
+  function drawAcceptance() {
+    const record = acceptance.delivery_check;
+    const reason = INVALIDATION_LABELS[record?.invalidation_reason] ?? '';
+    const details = (record?.invalidation_details ?? []).map((key) => DNS_LABELS[key]).filter(Boolean).join('・');
+    setText(root, '[data-delivery-status]', record ? `${record.status === 'PASS' && !reason ? '合格' : '配信を開始できません'}／有効期限 ${formatTime(record.expires_at)}／残り${record.remaining_days}日${reason ? `／${reason}` : ''}${details ? `（${details}）` : ''}` : '受入記録はありません。');
+    fillSelect(q('[data-check-select]'), acceptance.checks.map((check) => [check.check_id, `${formatTime(check.started_at)}に始めた検査`]), '検査を選ぶ');
+    if (selectedCheck) q('[data-check-select]').value = selectedCheck.check_id;
+    q('[data-check-steps]').hidden = !selectedCheck;
+    fillSelect(q('[data-case-form]').elements.case_id, acceptance.required_cases.map((item) => [item.id, `${item.id} ${item.title}（人が記録する）`]));
+    fillSelect(q('[data-evidence-form]').elements.case_id, acceptance.required_cases.map((item) => [item.id, `${item.id} ${item.title}`]));
+    tableRows(q('[data-cases]'), acceptance.required_cases.map((item) => {
+      const saved = selectedCheck?.cases?.[item.id];
+      return [item.id, item.title, { PASS: '合格', FAIL: '不合格', NA: '対象外' }[saved?.result] ?? '未記録', saved?.note ?? '', `${saved?.evidence?.length ?? 0}件`];
+    }));
+    setText(root, '[data-test-sends]', (selectedCheck?.test_sends ?? []).map((item) => `${formatTime(item.at)} ${item.email_masked} ${item.status}`).join('\n'));
+  }
+  async function loadAcceptance() {
+    acceptance = await ctx.api.request('/settings/delivery-check');
+    selectedCheck = acceptance.checks.find((check) => check.check_id === selectedCheck?.check_id) ?? acceptance.checks.at(-1);
+    drawAcceptance();
+  }
+  on(root, '[data-check-select]', 'change', (event) => { selectedCheck = acceptance.checks.find((check) => check.check_id === event.target.value); drawAcceptance(); });
+  on(root, '[data-check-start]', 'click', () => perform(async () => {
+    selectedCheck = await ctx.api.request('/settings/delivery-check', { method: 'POST', body: {} });
+    await loadAcceptance(); showMessage(root, '受入検査を始めました。30日以内に試験と証跡を登録して確定してください。');
+  }, true));
+  q('[data-case-form]').addEventListener('submit', (event) => {
+    event.preventDefault(); if (!selectedCheck || conflict) return;
     const values = Object.fromEntries(new FormData(event.currentTarget));
     perform(async () => {
-      const body = deliveryInput(values);
-      if (!await confirmDialog(body.passed ? '受信確認を合格として登録します。必須試験の結果と現在の設定が一致することを確認してください。' : '受信確認を不合格として登録し、一般の配信を止めます。')) return;
-      await ctx.api.request('/settings/delivery-check', { method: 'POST', body });
-      settings = await ctx.api.request('/settings');
-      populate(); showMessage(root, '受信確認の記録を登録しました。');
+      await ctx.api.request(`/settings/delivery-check/${selectedCheck.check_id}/cases/${values.case_id}`, { method: 'PUT', body: { result: values.result, note: values.note } });
+      await loadAcceptance(); showMessage(root, '試験の結果を記録しました。');
+    }, true);
+  });
+  q('[data-evidence-form]').addEventListener('submit', (event) => {
+    event.preventDefault(); if (!selectedCheck || conflict) return;
+    const form = event.currentTarget;
+    const file = form.elements.file.files[0];
+    const case_id = form.elements.case_id.value;
+    perform(async () => {
+      if (!file || !file.size || file.size > 1024 * 1024) throw new ApiError('PAYLOAD_TOO_LARGE');
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = '';
+      for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+      await ctx.api.request(`/settings/delivery-check/${selectedCheck.check_id}/evidence`, { method: 'POST', body: { case_id, file_name: file.name, content_base64: btoa(binary) } });
+      await loadAcceptance(); form.elements.file.value = ''; showMessage(root, '証跡を登録しました。');
+    }, true);
+  });
+  q('[data-delivery-form]').addEventListener('submit', (event) => {
+    event.preventDefault(); if (!selectedCheck || conflict) return;
+    const body = deliveryInput(Object.fromEntries(new FormData(event.currentTarget)));
+    perform(async () => {
+      if (!await confirmDialog('受入検査を確定します。不合格の必須試験がある場合は一般配信を止めます。')) return;
+      await ctx.api.request(`/settings/delivery-check/${selectedCheck.check_id}/submit`, { method: 'POST', body });
+      selectedCheck = undefined; await loadAcceptance(); showMessage(root, '受入検査を確定しました。');
     }, true);
   });
   async function audit(cursor) {
@@ -102,4 +144,5 @@ export async function mount(ctx) {
   });
   on(root, '[data-audit-next]', 'click', () => perform(() => audit(auditCursor)));
   populate(); permissions();
+  if (admin()) await perform(loadAcceptance);
 }

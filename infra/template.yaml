@@ -108,6 +108,7 @@ Resources:
       LifecycleConfiguration:
         Rules:
           - {Id: Staging, Status: Enabled, Prefix: imports/staging/, ExpirationInDays: 7}
+          - {Id: ImportPreview, Status: Enabled, Prefix: imports/preview/, ExpirationInDays: 7}
           - {Id: Ready, Status: Enabled, Prefix: imports/ready/, ExpirationInDays: 365}
           - {Id: Reports, Status: Enabled, Prefix: imports/report/, ExpirationInDays: 365}
           - {Id: Recipients, Status: Enabled, Prefix: recipients/, ExpirationInDays: 30}
@@ -251,6 +252,72 @@ Resources:
         Enabled: true
         MatchingEventTypes: [SEND, REJECT, BOUNCE, COMPLAINT, DELIVERY, DELIVERY_DELAY, SUBSCRIPTION, RENDERING_FAILURE]
         KinesisFirehoseDestination: {IAMRoleARN: !GetAtt SesFirehoseRole.Arn, DeliveryStreamARN: !GetAtt EventStream.Arn}
+  EventBridgeDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName: !Ref ConfigurationSet
+      EventDestination:
+        Name: eventbridge
+        Enabled: true
+        MatchingEventTypes: [SEND, REJECT, BOUNCE, COMPLAINT, DELIVERY, DELIVERY_DELAY, SUBSCRIPTION, RENDERING_FAILURE]
+        EventBridgeDestination:
+          EventBusArn: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/default'
+  EventsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RecipientEvents
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ['dynamodb:PutItem']
+                Resource: !GetAtt Table.Arn
+                Condition: {'ForAllValues:StringLike': {'dynamodb:LeadingKeys': ['ADDR#*']}}
+  EventsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub 'ht2-${Env}-events'
+      Runtime: nodejs24.x
+      RuntimeManagementConfig: !If
+        - HasRuntimeVersion
+        - {UpdateRuntimeOn: Manual, RuntimeVersionArn: !Ref RuntimeVersionArn}
+        - {UpdateRuntimeOn: FunctionUpdate}
+      Architectures: [arm64]
+      Handler: src/events/handler.handler
+      Code: ../build/backend/
+      Role: !GetAtt EventsRole.Arn
+      MemorySize: 256
+      Timeout: 29
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref Table
+  SesEventsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: default
+      State: ENABLED
+      EventPattern:
+        source: [aws.ses]
+        detail:
+          mail:
+            tags:
+              'ses:configuration-set': [!Sub 'ht2-${Env}']
+      Targets: [{Id: RecipientEvents, Arn: !GetAtt EventsFunction.Arn}]
+  EventsInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EventsFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SesEventsRule.Arn
+      SourceAccount: !Ref 'AWS::AccountId'
   FirehoseRole:
     Type: AWS::IAM::Role
     Properties:
@@ -851,7 +918,7 @@ Resources:
         Statement:
           - Effect: Allow
             Action: ['s3:DeleteObject']
-            Resource: !Sub '${DataBucket.Arn}/recipients/*'
+            Resource: [!Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/imports/staging/*']
           - Effect: Allow
             Action: ['sns:Publish']
             Resource: !Ref AlertTopic
@@ -893,7 +960,7 @@ Resources:
             Resource: [!Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/delivery-checks/*', !Sub '${DataBucket.Arn}/imports/report/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/allowlists/*']
           - Effect: Allow
             Action: ['s3:PutObject']
-            Resource: [!Sub '${DataBucket.Arn}/imports/staging/*']
+            Resource: [!Sub '${DataBucket.Arn}/imports/staging/*', !Sub '${DataBucket.Arn}/delivery-checks/*']
           - Effect: Allow
             Action: ['states:StartExecution']
             Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ht2-${Env}'
@@ -911,7 +978,7 @@ Resources:
             Resource: !GetAtt SchedulerRole.Arn
             Condition: {StringEquals: {'iam:PassedToService': scheduler.amazonaws.com}}
           - Effect: Allow
-            Action: ['cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser']
+            Action: ['cognito-idp:AdminGetUser', 'cognito-idp:AdminListGroupsForUser', 'cognito-idp:ListUsersInGroup', 'cognito-idp:AdminCreateUser', 'cognito-idp:AdminAddUserToGroup', 'cognito-idp:AdminRemoveUserFromGroup', 'cognito-idp:AdminDisableUser', 'cognito-idp:AdminEnableUser', 'cognito-idp:AdminUserGlobalSignOut', 'cognito-idp:AdminSetUserMFAPreference', 'cognito-idp:AdminResetUserPassword']
             Resource: !GetAtt UserPool.Arn
           - Effect: Allow
             Action: ['lambda:InvokeFunction']

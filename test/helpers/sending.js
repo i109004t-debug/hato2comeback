@@ -191,6 +191,7 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
     destinations: { EventDestinations: [
       { Enabled: true, MatchingEventTypes: REQUIRED_EVENTS, CloudWatchDestination: { DimensionConfigurations: [{ DimensionName: 'campaign', DimensionValueSource: 'MESSAGE_TAG', DefaultDimensionValue: 'none' }] } },
       { Enabled: true, MatchingEventTypes: REQUIRED_EVENTS, KinesisFirehoseDestination: { DeliveryStreamArn: deps.eventStreamArn, IamRoleArn: 'arn:aws:iam::123456789012:role/events' } },
+      { Enabled: true, MatchingEventTypes: REQUIRED_EVENTS, EventBridgeDestination: { EventBusArn: `arn:aws:events:${deps.region}:${deps.accountId}:event-bus/default` } },
     ] },
     contacts: addresses.map((EmailAddress) => ({ EmailAddress, UnsubscribeAll: false, TopicPreferences: [{ TopicName: 'news', SubscriptionStatus: 'OPT_IN' }] })),
     alarms: [...settings.reputation_alarms, ...monitoringAlarmNames(env)].map((AlarmName) => ({ AlarmName, StateValue: 'OK' })),

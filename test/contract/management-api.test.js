@@ -12,9 +12,9 @@ const expectCode = (response, status, code) => { assert.equal(response.statusCod
 const audits = (f) => [...f.ddb.items.values()].filter((item) => item.PK.startsWith('AUDIT#'));
 const rejectedOperations = {
   admin: [],
-  sender: ['settings.update', 'settings.delivery-check', 'contacts.reconsent', 'contacts.erase', 'campaigns.approve', 'campaigns.reject', 'campaigns.review', 'audit.list'],
-  approver: ['settings.update', 'settings.delivery-check', 'contacts.create', 'contacts.update', 'contacts.unsubscribe', 'contacts.reconsent', 'contacts.erase', 'imports.create', 'imports.get', 'imports.list', 'campaigns.create', 'campaigns.update', 'campaigns.test-send', 'campaigns.submit', 'campaigns.start', 'campaigns.unschedule', 'campaigns.review', 'audit.list'],
-  viewer: ['settings.update', 'settings.delivery-check', 'contacts.create', 'contacts.update', 'contacts.unsubscribe', 'contacts.reconsent', 'contacts.erase', 'imports.create', 'imports.get', 'imports.list', 'campaigns.create', 'campaigns.update', 'campaigns.preview', 'campaigns.test-send', 'campaigns.submit', 'campaigns.approve', 'campaigns.reject', 'campaigns.start', 'campaigns.unschedule', 'campaigns.pause', 'campaigns.resume', 'campaigns.cancel', 'campaigns.review', 'audit.list'],
+  sender: ['settings.update', 'delivery-check.get', 'delivery-check.start', 'delivery-check.case', 'delivery-check.evidence', 'delivery-check.submit', 'staff.list', 'staff.create', 'staff.change', 'contacts.reconsent', 'contacts.erase', 'campaigns.approve', 'campaigns.reject', 'campaigns.review', 'audit.list'],
+  approver: ['contacts.events', 'imports.confirm', 'imports.discard', 'settings.update', 'delivery-check.get', 'delivery-check.start', 'delivery-check.case', 'delivery-check.evidence', 'delivery-check.submit', 'staff.list', 'staff.create', 'staff.change', 'contacts.create', 'contacts.update', 'contacts.unsubscribe', 'contacts.reconsent', 'contacts.erase', 'imports.create', 'imports.get', 'imports.list', 'campaigns.create', 'campaigns.update', 'campaigns.test-send', 'campaigns.submit', 'campaigns.start', 'campaigns.unschedule', 'campaigns.review', 'audit.list'],
+  viewer: ['contacts.events', 'imports.confirm', 'imports.discard', 'settings.update', 'delivery-check.get', 'delivery-check.start', 'delivery-check.case', 'delivery-check.evidence', 'delivery-check.submit', 'staff.list', 'staff.create', 'staff.change', 'contacts.create', 'contacts.update', 'contacts.unsubscribe', 'contacts.reconsent', 'contacts.erase', 'imports.create', 'imports.get', 'imports.list', 'campaigns.create', 'campaigns.update', 'campaigns.preview', 'campaigns.test-send', 'campaigns.submit', 'campaigns.approve', 'campaigns.reject', 'campaigns.start', 'campaigns.unschedule', 'campaigns.pause', 'campaigns.resume', 'campaigns.cancel', 'campaigns.review', 'audit.list'],
 };
 
 test('T-01 閲覧者による登録・配信開始を処理前に拒否', async () => {
@@ -392,18 +392,15 @@ test('API-02 組織設定はversion・認証・登録済みテスト先を検査
   expectCode(await f.request('PUT /settings', { ...body, version: 1, test_recipients: ['missing@example.com'] }), 422, 'TEST_RECIPIENT_NOT_REGISTERED');
 });
 
-test('T-51 API-26は必須試験・サーバーハッシュ・S3証跡を検査しAPI-02の偽装を拒否', async () => {
+test('T-51 旧API-26の手入力ハッシュとAPI-02による受入記録の偽装を拒否', async () => {
   const f = managementFixture({ env: 'prod' });
   const body = { passed: true, note: '実受信と監視経路を確認', evidence_key: f.delivery.evidence_key, cases: Object.fromEntries(DELIVERY_CASES.map((id) => [id, 'PASS'])), config_hash: f.configHash, dns_config_hash: f.auth.dns_config_hash };
-  expectCode(await f.request('POST /settings/delivery-check', { ...body, cases: { 'T-30': 'PASS' } }), 422, 'DELIVERY_CHECK_REQUIRED');
-  expectCode(await f.request('POST /settings/delivery-check', { ...body, config_hash: '0'.repeat(64) }), 422, 'DELIVERY_CHECK_REQUIRED');
-  f.files.delete(body.evidence_key); expectCode(await f.request('POST /settings/delivery-check', body), 422, 'DELIVERY_CHECK_REQUIRED');
-  f.files.set(body.evidence_key, '{}');
-  const saved = await f.request('POST /settings/delivery-check', body);
-  assert.equal(saved.json.delivery_check.by, 'user', saved.body); assert.equal(saved.json.delivery_check.status, 'PASS');
-  const orgBody = { version: 1, from_local: 'info', from_name: '会報', legal: f.org.legal, delivery_check: { status: 'PASS' } };
+  expectCode(await f.request('POST /settings/delivery-check', body), 400, 'INVALID_REQUEST');
+  const orgBody = { version: 0, from_local: 'info', from_name: '会報', legal: f.org.legal, delivery_check: { status: 'PASS' } };
   expectCode(await f.request('PUT /settings', orgBody), 400, 'INVALID_REQUEST');
-  assert.equal((await f.request('POST /settings/delivery-check', { ...body, passed: false })).json.delivery_check.status, 'FAIL');
+  const check = (await f.request('POST /settings/delivery-check', {})).json;
+  assert.equal((await f.request(`PUT /settings/delivery-check/${check.check_id}/cases/T-25`, { result: 'FAIL', note: '不合格' })).statusCode, 200);
+  assert.equal((await f.request(`POST /settings/delivery-check/${check.check_id}/submit`, { note: '一般配信を止める' })).json.delivery_check.status, 'FAIL');
   f.setCampaign({ status: 'APPROVED' }); expectCode(await f.request(`POST ${f.campaignPath}/start`, { mode: 'NOW' }), 422, 'DELIVERY_CHECK_REQUIRED');
 });
 

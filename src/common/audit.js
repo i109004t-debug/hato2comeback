@@ -13,8 +13,11 @@ function redactAudit(value) {
   return value;
 }
 
-export function createAuditItem({ actor_sub, action, target, result, request_id, email, details }, { now = defaultNow, id = ulid, hmacKey } = {}) {
+export function createAuditItem({ actor_sub, action, target, result, request_id, email, addr_id, details }, { now = defaultNow, id = ulid, hmacKey } = {}) {
   if ([actor_sub, action, target, result, request_id].some((value) => typeof value !== 'string' || !value)) throw new TypeError('Audit fields are required');
+  if (addr_id !== undefined && !/^[a-f0-9]{64}$/.test(addr_id)) throw new TypeError('Invalid audit recipient identifier');
+  const recipient = email ? addressHash(normalizeEmail(email).email, hmacKey) : addr_id;
+  if (addr_id && recipient !== addr_id) throw new TypeError('Audit recipient mismatch');
   const time = now();
   const ts = new Date(time).toISOString();
   return {
@@ -22,7 +25,7 @@ export function createAuditItem({ actor_sub, action, target, result, request_id,
     PK: `AUDIT#${ts.slice(0, 7).replace('-', '')}`,
     SK: `${ts}#${id()}`,
     ts,
-    ...(email ? { addr_id: addressHash(normalizeEmail(email).email, hmacKey) } : {}),
+    ...(recipient ? { addr_id: recipient } : {}),
     expires_at: unixSeconds(time) + 365 * 86400,
   };
 }

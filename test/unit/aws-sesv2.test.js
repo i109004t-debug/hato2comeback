@@ -27,7 +27,7 @@ test('12.6 AWSアダプターはSDKを遅延読込し、許可するAPIだけを
     s3: 'putObject getObject headObject deleteObject',
     sfn: 'startExecution describeExecution sendTaskSuccess sendTaskFailure',
     scheduler: 'createSchedule deleteSchedule getSchedule',
-    cognito: 'adminGetUser adminListGroupsForUser',
+    cognito: 'adminGetUser adminListGroupsForUser listUsersInGroup adminCreateUser adminAddUserToGroup adminRemoveUserFromGroup adminDisableUser adminEnableUser adminUserGlobalSignOut adminSetUserMFAPreference adminResetUserPassword',
     cloudwatch: 'getMetricData describeAlarms',
     sns: 'publish', ssm: 'getParameter', secrets: 'getSecretValue', lambda: 'invoke',
   };

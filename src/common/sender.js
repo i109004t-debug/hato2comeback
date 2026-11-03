@@ -4,6 +4,8 @@ import { normalizeEmail } from './email.js';
 import { pauseReason } from './precheck.js';
 import { contactMetadataKey, contactBlocked } from './contact-metadata.js';
 import { campaignDeadline } from './forecast.js';
+import { recipientTags } from './message.js';
+export { buildSendInput } from './message.js';
 
 export function classifySendError(error) {
   const status = error.$metadata?.httpStatusCode;
@@ -16,17 +18,6 @@ export function classifySendError(error) {
   if (name === 'TooManyRequestsException' || name === 'ThrottlingException' && /Maximum sending rate exceeded/i.test(error.message ?? '')) return { type: 'RATE_LIMIT', code };
   if (name === 'BadRequestException' && /(?:email|e-mail|recipient|address).{0,50}(?:invalid|malformed|format|syntax)|(?:invalid|malformed).{0,50}(?:email|e-mail|recipient|address)/i.test(error.message ?? '')) return { type: 'FAILED', code };
   return { type: 'CONFIG_ERROR', code };
-}
-
-export function buildSendInput(campaign, email, { contactList, configSet, test = false, simple } = {}) {
-  if (normalizeEmail(email).email !== email || !contactList || !configSet || !campaign.from || /[\r\n]/.test(campaign.from)) throw new TypeError('Invalid send input');
-  return {
-    FromEmailAddress: campaign.from, Destination: { ToAddresses: [email] },
-    ...(campaign.reply_to ? { ReplyToAddresses: [campaign.reply_to] } : {}),
-    Content: simple ? { Simple: { Subject: { Data: simple.subject, Charset: 'UTF-8' }, Body: { Text: { Data: simple.text, Charset: 'UTF-8' } } } } : { Template: { TemplateName: campaign.template_name, TemplateData: '{}' } },
-    ListManagementOptions: { ContactListName: contactList, TopicName: campaign.topic },
-    ConfigurationSetName: configSet, EmailTags: [{ Name: 'campaign', Value: test ? 'test' : campaign.campaign_id }],
-  };
 }
 
 export function createSender(deps) {
@@ -152,7 +143,7 @@ export function createSender(deps) {
         if (contact.UnsubscribeAll || !contact.TopicPreferences?.some((entry) => entry.TopicName === input.ListManagementOptions?.TopicName && entry.SubscriptionStatus === 'OPT_IN')) return { type: 'CONFIG_ERROR', code: 'TEST_RECIPIENT_NOT_REGISTERED' };
       }
       const rid = await contactMetadataKey(deps, context.address);
-      input = { ...input, EmailTags: [...(input.EmailTags ?? []).filter((tag) => tag.Name !== 'rid'), { Name: 'rid', Value: rid }] };
+      input = { ...input, EmailTags: recipientTags(input.EmailTags, rid) };
       for (let attempt = 0; ; attempt += 1) {
         const stopped = await beforeAttempt(context, limiter);
         if (stopped.type) return stopped;

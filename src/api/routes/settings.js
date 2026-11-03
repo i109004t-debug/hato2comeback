@@ -1,6 +1,6 @@
 import { AppError } from '../../common/http.js';
-import { updateRecord, timestamp } from '../../common/records.js';
-import { assertAcceptance, assertIdentity } from '../../common/acceptance.js';
+import { updateRecord } from '../../common/records.js';
+import { assertIdentity } from '../../common/acceptance.js';
 import { requiresEmailMask } from '../../common/authz.js';
 import { maskEmail } from '../../common/email.js';
 
@@ -35,16 +35,4 @@ async function update(ctx) {
   return get(ctx);
 }
 
-async function deliveryCheck(ctx) {
-  const { runtime, body, user } = ctx;
-  const org = await runtime.store.get('SETTINGS', 'ORG');
-  if (!org) throw new AppError('SETTINGS_INCOMPLETE', 422, '組織設定を保存してください。');
-  if (body.passed) await assertAcceptance(runtime, org, body);
-  const { passed, ...fields } = body;
-  const record = { ...fields, status: passed ? 'PASS' : 'FAIL', passed_at: timestamp(runtime), by: user.sub };
-  await updateRecord(runtime, 'SETTINGS', 'ORG', org, { delivery_check: record, updated_by: user.sub });
-  runtime.precheck.invalidate();
-  return { delivery_check: record };
-}
-
-export default { 'settings.get': get, 'settings.update': update, 'settings.delivery-check': deliveryCheck };
+export default { 'settings.get': get, 'settings.update': update };

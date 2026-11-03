@@ -101,12 +101,13 @@ test('10.2 配信の本文スキーマとパラメーター・ページング', 
   assert.ok(validateQuery('audit.list', { month: '202611' }));
 });
 
-test('API-26 受入記録は項目の型・証跡キー・ハッシュを検査', () => {
+test('API-26〜29 受入検査の入力を検証し、旧手入力方式は拒否する', () => {
   const input = { passed: true, note: '確認済み', evidence_key: 'delivery-checks/id/result.json', cases: { 'T-30': 'PASS' }, config_hash: 'a'.repeat(64), dns_config_hash: 'b'.repeat(64) };
-  assert.deepEqual(validateRoute('settings.delivery-check', input), input);
-  assert.throws(() => validateRoute('settings.delivery-check', { passed: true }));
-  assert.throws(() => validateRoute('settings.delivery-check', { ...input, evidence_key: 'delivery-checks/../other' }));
-  assert.throws(() => validateRoute('settings.delivery-check', { ...input, cases: { 'T-30': true } }));
+  assert.throws(() => validateRoute('delivery-check.start', input));
+  assert.deepEqual(validateRoute('delivery-check.start', {}), {});
+  assert.deepEqual(validateRoute('delivery-check.case', { result: 'PASS', note: '確認済み' }), { result: 'PASS', note: '確認済み' });
+  assert.throws(() => validateRoute('delivery-check.case', { result: true, note: '確認済み' }));
+  assert.deepEqual(validateRoute('delivery-check.submit', { note: '確認済み' }), { note: '確認済み' });
 });
 
 test('6.7 フッターに法定表示と解除URLがちょうど1つ', () => {

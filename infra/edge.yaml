@@ -53,11 +53,25 @@ Resources:
                             PositionalConstraint: EXACTLY
                             SearchString: POST
                             TextTransformations: [{Priority: 0, Type: NONE}]
-                        - ByteMatchStatement:
-                            FieldToMatch: {UriPath: {}}
-                            PositionalConstraint: EXACTLY
-                            SearchString: /api/v1/imports
-                            TextTransformations: [{Priority: 0, Type: NONE}]
+                        - OrStatement:
+                            Statements:
+                              - ByteMatchStatement:
+                                  FieldToMatch: {UriPath: {}}
+                                  PositionalConstraint: EXACTLY
+                                  SearchString: /api/v1/imports
+                                  TextTransformations: [{Priority: 0, Type: NONE}]
+                              - AndStatement:
+                                  Statements:
+                                    - ByteMatchStatement:
+                                        FieldToMatch: {UriPath: {}}
+                                        PositionalConstraint: STARTS_WITH
+                                        SearchString: /api/v1/settings/delivery-check/
+                                        TextTransformations: [{Priority: 0, Type: NONE}]
+                                    - ByteMatchStatement:
+                                        FieldToMatch: {UriPath: {}}
+                                        PositionalConstraint: ENDS_WITH
+                                        SearchString: /evidence
+                                        TextTransformations: [{Priority: 0, Type: NONE}]
                         - SizeConstraintStatement:
                             FieldToMatch: {Body: {OversizeHandling: MATCH}}
                             ComparisonOperator: GT
@@ -81,11 +95,25 @@ Resources:
                             PositionalConstraint: EXACTLY
                             SearchString: POST
                             TextTransformations: [{Priority: 0, Type: NONE}]
-                        - ByteMatchStatement:
-                            FieldToMatch: {UriPath: {}}
-                            PositionalConstraint: EXACTLY
-                            SearchString: /api/v1/imports
-                            TextTransformations: [{Priority: 0, Type: NONE}]
+                        - OrStatement:
+                            Statements:
+                              - ByteMatchStatement:
+                                  FieldToMatch: {UriPath: {}}
+                                  PositionalConstraint: EXACTLY
+                                  SearchString: /api/v1/imports
+                                  TextTransformations: [{Priority: 0, Type: NONE}]
+                              - AndStatement:
+                                  Statements:
+                                    - ByteMatchStatement:
+                                        FieldToMatch: {UriPath: {}}
+                                        PositionalConstraint: STARTS_WITH
+                                        SearchString: /api/v1/settings/delivery-check/
+                                        TextTransformations: [{Priority: 0, Type: NONE}]
+                                    - ByteMatchStatement:
+                                        FieldToMatch: {UriPath: {}}
+                                        PositionalConstraint: ENDS_WITH
+                                        SearchString: /evidence
+                                        TextTransformations: [{Priority: 0, Type: NONE}]
                         - SizeConstraintStatement:
                             FieldToMatch: {Body: {OversizeHandling: MATCH}}
                             ComparisonOperator: GT

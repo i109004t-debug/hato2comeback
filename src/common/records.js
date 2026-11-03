@@ -6,10 +6,10 @@ export const conflict = (error) => ['STATE_CONFLICT', 'VERSION_CONFLICT'].includ
 export const timestamp = (runtime) => new Date(runtime.now()).toISOString();
 
 export async function updateRecord(runtime, PK, SK, current, set, remove = []) {
-  if (['CAMPAIGN', 'IMPORT'].includes(PK)) assertSupportedSchema(current);
+  if (['CAMPAIGN', 'IMPORT', 'ACCEPTANCE'].includes(PK)) assertSupportedSchema(current);
   const expressions = createExpressions();
   let ConditionExpression = current ? Number.isSafeInteger(current.version) ? expressions.equals('version', current.version) : `attribute_exists(${expressions.name('PK')}) AND ${expressions.notExists('version')}` : expressions.notExists('PK');
-  if (current && ['CAMPAIGN', 'IMPORT'].includes(PK)) ConditionExpression += ` AND ${expressions.equals('schema_version', 1)}`;
+  if (current && ['CAMPAIGN', 'IMPORT', 'ACCEPTANCE'].includes(PK)) ConditionExpression += ` AND ${expressions.equals('schema_version', 1)}`;
   return runtime.store.update(PK, SK, {
     ConditionExpression,
     ...buildUpdate({ set: { ...set, version: (current?.version ?? 0) + 1, updated_at: timestamp(runtime) }, remove }, expressions),

@@ -12,7 +12,7 @@ import { createTime } from '../common/time.js';
 import { createMetrics } from '../common/metrics.js';
 import { apiSchemaStore } from '../common/schema.js';
 import { createAuthz, authorize } from '../common/authz.js';
-import { accessClaims, assertOrigin, assertRequestUrl, errorResponse, jsonResponse, parseJsonBody } from '../common/http.js';
+import { AppError, accessClaims, assertOrigin, assertRequestUrl, errorResponse, jsonResponse, parseJsonBody } from '../common/http.js';
 import { resolveRoute } from '../common/router.js';
 import { validateRoute, validateParams, validateQuery } from '../common/validate.js';
 import { validateImportRequest } from '../common/csv.js';
@@ -23,8 +23,11 @@ import contacts from './routes/contacts.js';
 import imports from './routes/imports.js';
 import campaigns from './routes/campaigns.js';
 import auditRoutes from './routes/audit.js';
+import staff from './routes/staff.js';
+import readiness from './routes/readiness.js';
+import deliveryCheck from './routes/delivery-check.js';
 
-const routes = { ...me, ...settings, ...topics, ...contacts, ...imports, ...campaigns, ...auditRoutes };
+const routes = { ...me, ...settings, ...topics, ...contacts, ...imports, ...campaigns, ...auditRoutes, ...staff, ...readiness, ...deliveryCheck };
 const topicOperations = new Set(['contacts.list', 'contacts.create', 'contacts.update', 'contacts.unsubscribe', 'contacts.reconsent', 'campaigns.create', 'campaigns.update']);
 
 export function createHandler(deps = {}) {
@@ -79,13 +82,14 @@ export function createHandler(deps = {}) {
       assertRequestUrl(event);
       const params = validateParams(route.params);
       const query = validateQuery(route.operation, event.queryStringParameters ?? Object.fromEntries(new URLSearchParams(event.rawQueryString ?? '')));
-      const input = route.operation === 'imports.create' ? validateImportRequest(event) : parseJsonBody(event);
+      const input = route.operation === 'imports.create' ? validateImportRequest(event, query.mode) : parseJsonBody(event);
       let body = route.operation === 'imports.create' ? input : validateRoute(route.operation, input, { now: services.now, senderDomain: services.senderDomain });
       let topicDefinitions = [];
       if (topicOperations.has(route.operation)) topicDefinitions = (await services.ses.getContactList({ ContactListName: services.contactList })).Topics ?? [];
       const topics = topicDefinitions.map((item) => item.TopicName);
       if (topicOperations.has(route.operation)) body = validateRoute(route.operation, input, { now: services.now, senderDomain: services.senderDomain, topics });
-      const value = await routes[route.operation]({ runtime: services, event, context, route, params, query, body, user, audit, requestId, topics, topicDefinitions });
+      if (route.operation === 'staff.change' && (params.action === 'roles' ? !body.roles : Object.keys(body).length)) throw new AppError('INVALID_REQUEST', 400, '入力形式を確認してください。');
+      const value = await routes[route.operation]({ runtime: services, event, context, route, params, query, body, user, claims, audit, requestId, topics, topicDefinitions });
       if (!['GET'].includes(route.method) && !['contacts.get', 'campaigns.preview', 'campaigns.submit', 'campaigns.approve', 'campaigns.unknowns'].includes(route.operation)) await audit(route.operation.toUpperCase().replaceAll('.', '_'), params.id ?? params.importId ?? route.operation.split('.')[0]);
       return jsonResponse(value?.statusCode ?? 200, value?.data ?? value);
     } catch (error) {

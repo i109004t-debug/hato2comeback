@@ -143,13 +143,13 @@ test('9.4 API-02の更新では組織設定だけを送り、versionを必須に
   assert.throws(() => settingsInput({ test_recipients: '', max_rate_per_sec: 'NaN' }, 0));
 });
 
-test('API-26 必須試験をサーバーと一致させ、未確認を合格として送らない', () => {
+test('API-29 必須試験をサーバーと一致させ、確定時はメモだけを送る', () => {
   assert.deepEqual(DELIVERY_CASES, SERVER_CASES);
   const input = { passed: 'true', note: '主要事業者で受信確認済み', evidence_key: 'delivery-checks/2026-11/report.json', config_hash: 'a'.repeat(64), dns_config_hash: 'b'.repeat(64), ...Object.fromEntries(DELIVERY_CASES.map((id) => [id, 'PASS'])) };
-  assert.doesNotThrow(() => validateRoute('settings.delivery-check', deliveryInput(input)));
-  assert.throws(() => deliveryInput({ ...input, 'T-25': 'FAIL' }));
-  assert.throws(() => deliveryInput({ ...input, evidence_key: 'delivery-checks/../secret' }));
-  assert.equal(deliveryInput({ ...input, passed: 'false', 'T-25': 'FAIL' }).passed, false);
+  assert.deepEqual(deliveryInput(input), { note: input.note });
+  assert.doesNotThrow(() => validateRoute('delivery-check.submit', deliveryInput(input)));
+  assert.throws(() => deliveryInput({ note: ' ' }));
+  assert.throws(() => deliveryInput({ note: 'x'.repeat(1001) }));
 });
 
 test('9.4 配信履歴は状態・保持期間・予約日時・件数を整形', () => {

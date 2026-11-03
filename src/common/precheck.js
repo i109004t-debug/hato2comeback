@@ -9,10 +9,11 @@ export const REQUIRED_EVENTS = ['SEND', 'REJECT', 'BOUNCE', 'COMPLAINT', 'DELIVE
 export const DELIVERY_CASES = ['T-25', 'T-26', 'T-27', 'T-28', 'T-30', 'T-31', 'T-32', 'T-33', 'T-34', 'T-36', 'T-38', 'T-39', 'T-40', 'T-41', 'T-43', 'T-44', 'T-45', 'T-46', 'T-47', 'T-48', 'T-49', 'T-50', 'T-51'];
 
 const stable = (value) => JSON.stringify(value, (_, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.keys(item).sort().map((name) => [name, item[name]])) : item);
-let codeHash;
-export function sendingConfigHash(settings) {
-  codeHash ??= createHash('sha256').update(['aws.js', 'config.js', 'contact-metadata.js', 'email.js', 'footer.js', 'sender.js', 'monitoring.js', 'forecast.js', 'campaign-lifecycle.js', '../worker/state.js', '../worker/modes/send.js', '../worker/modes/finish.js', 'precheck.js', 'acceptance.js', '../api/routes/campaigns.js', '../worker/modes/prepare.js', '../worker/modes/daily.js'].map((file) => readFileSync(new URL(file, import.meta.url), 'utf8')).join('\n')).digest('hex');
-  return createHash('sha256').update(stable({ ...settings, codeHash })).digest('hex');
+export const MESSAGE_CODE_FILES = Object.freeze(['message.js', 'footer.js', 'email.js']);
+export function sendingConfigHash(settings, readCode = (file) => readFileSync(new URL(file, import.meta.url), 'utf8')) {
+  const codeHash = createHash('sha256').update(MESSAGE_CODE_FILES.map(readCode).join('\n')).digest('hex');
+  const sending = Object.fromEntries(['env', 'region', 'accountId', 'senderDomain', 'contactList', 'configSet', 'from_local', 'from_name', 'reply_to', 'legal'].map((key) => [key, settings[key]]));
+  return createHash('sha256').update(stable({ ...sending, codeHash })).digest('hex');
 }
 
 export function pauseReason(code) {
@@ -76,6 +77,7 @@ export function createPrecheck(deps) {
         assertHealthy(enabled.some((entry) => dimensions(entry)?.length === 1 && dimensions(entry)[0].DimensionName === 'campaign' && dimensions(entry)[0].DimensionValueSource === 'MESSAGE_TAG' && dimensions(entry)[0].DefaultDimensionValue === 'none'), 'EVENT_DESTINATION_DISABLED');
         const streamPrefix = `arn:aws:firehose:${deps.region}:${deps.accountId}:deliverystream/`;
         assertHealthy(deps.eventStreamArn?.startsWith(streamPrefix) && enabled.some((entry) => entry.KinesisFirehoseDestination?.DeliveryStreamArn === deps.eventStreamArn && entry.KinesisFirehoseDestination.IamRoleArn?.startsWith(`arn:aws:iam::${deps.accountId}:role/`)), 'EVENT_DESTINATION_DISABLED');
+        assertHealthy(enabled.some((entry) => entry.EventBridgeDestination?.EventBusArn === `arn:aws:events:${deps.region}:${deps.accountId}:event-bus/default`), 'EVENT_DESTINATION_DISABLED');
         const auth = await store.get('SETTINGS', 'AUTH_STATUS');
         assertHealthy(auth && auth.config_hash === configHash, auth ? 'AUTH_CHECK_STALE' : 'AUTH_CHECK_FAILED');
         assertHealthy(auth.status === 'PASS' && auth.domain === deps.senderDomain && /^[a-f0-9]{64}$/.test(auth.dns_config_hash ?? '') && now() - Date.parse(auth.checked_at) >= 0 && now() - Date.parse(auth.checked_at) <= config.auth_status_max_age_hours * 3600000, 'AUTH_CHECK_FAILED');
@@ -84,8 +86,9 @@ export function createPrecheck(deps) {
         const exempt = options.test === true && (delivery === undefined || options.acceptanceRecovery === true);
         if (config.delivery_check_required && !exempt) {
           assertHealthy(deliveryValid, 'DELIVERY_CHECK_REQUIRED');
-          assertHealthy(typeof delivery.evidence_key === 'string' && /^delivery-checks\/[^/]+\/.+/.test(delivery.evidence_key) && !delivery.evidence_key.split('/').includes('..'), 'DELIVERY_CHECK_REQUIRED');
-          try { await deps.s3.headObject({ Bucket: deps.dataBucket, Key: delivery.evidence_key }); } catch { assertHealthy(false, 'DELIVERY_CHECK_REQUIRED'); }
+          const keys = delivery.evidence_keys ?? (delivery.evidence_key ? [delivery.evidence_key] : []);
+          assertHealthy(keys.length > 0 && keys.every((key) => /^delivery-checks\/[^/]+\/.+/.test(key) && !key.split('/').includes('..')), 'DELIVERY_CHECK_REQUIRED');
+          try { for (const Key of keys) await deps.s3.headObject({ Bucket: deps.dataBucket, Key }); } catch { assertHealthy(false, 'DELIVERY_CHECK_REQUIRED'); }
         }
         const quota = account.SendQuota;
         assertHealthy(Number.isFinite(quota?.Max24HourSend) && Number.isFinite(quota.SentLast24Hours) && (quota.Max24HourSend === -1 || quota.Max24HourSend >= 0) && quota.SentLast24Hours >= 0 && Number.isFinite(quota.MaxSendRate) && quota.MaxSendRate > 0, 'QUOTA_INSUFFICIENT');

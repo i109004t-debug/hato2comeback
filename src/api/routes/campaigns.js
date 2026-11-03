@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
 import { AppError, invalid } from '../../common/http.js';
 import { ulid } from '../../common/ids.js';
-import { createFooter } from '../../common/footer.js';
-import { formatFrom, maskEmail } from '../../common/email.js';
+import { fixedMessage, templateContent, templateName } from '../../common/message.js';
+import { maskEmail } from '../../common/email.js';
+import { countAccepted } from '../../common/delivery-events.js';
+import { openCheck, saveTestSends } from '../../common/acceptance.js';
 import { addressHash, redactText } from '../../common/log.js';
 import { assertIndependentApproval, authorize } from '../../common/authz.js';
 import { bodyWarnings } from '../../common/validate.js';
@@ -47,9 +49,7 @@ function assertStatus(campaign, statuses) {
 
 async function fixed(runtime, campaign) {
   const org = await runtime.store.get('SETTINGS', 'ORG');
-  if (!org?.from_local || !org.from_name) throw new AppError('SETTINGS_INCOMPLETE', 422, '差出人と法定表示を設定してください。');
-  const footer = createFooter(org, campaign.topic_display);
-  return { org, from: formatFrom(org.from_name, org.from_local, runtime.senderDomain), reply_to: org.reply_to ?? '', footer_text: footer, text: campaign.body_text + footer };
+  return fixedMessage(org, campaign, runtime.senderDomain);
 }
 
 async function check(ctx, campaign, extra = {}) {
@@ -104,8 +104,8 @@ async function submit(ctx) {
   const audience = { audience_estimate: estimate?.counts?.[campaign.topic] ?? null, audience_estimate_at: estimate?.counted_at ?? null };
   const f = await fixed(runtime, campaign);
   const rev = (campaign.rev ?? 0) + 1;
-  const template_name = `ht2-c-${campaign.campaign_id}-${rev}`;
-  const content = { Subject: campaign.subject, Text: f.text };
+  const template_name = templateName(campaign, rev);
+  const content = templateContent(campaign, f);
   try { await runtime.ses.createEmailTemplate({ TemplateName: template_name, TemplateContent: content }); } catch (error) {
     if (error.name !== 'AlreadyExistsException') throw error;
     const stored = (await runtime.ses.getEmailTemplate({ TemplateName: template_name })).TemplateContent;
@@ -374,6 +374,7 @@ async function testSend(ctx) {
   if (recovery) {
     if (!ctx.user.roles.includes('admin')) throw new AppError('FORBIDDEN', 403, '受入確認の復旧テストは管理者だけが実行できます。');
     if (!ctx.body.note?.trim()) throw invalid('note', 'REMEDIATION_REQUIRED');
+    await openCheck(runtime, ctx.body.check_id);
   }
   let campaign = await load(ctx);
   assertStatus(campaign, ['DRAFT', 'PENDING_APPROVAL', 'APPROVED']);
@@ -409,7 +410,8 @@ async function testSend(ctx) {
       results.push({ email_masked: maskEmail(email), status: ['ACCEPTED', 'UNKNOWN', 'FAILED', 'SKIPPED'].includes(result.type) ? result.type : 'NOT_ATTEMPTED', ...(result.code ? { code: result.code } : {}) });
       stop = !['ACCEPTED', 'FAILED', 'SKIPPED'].includes(result.type);
     }
-    await ctx.audit('TEST_SEND', campaign.campaign_id, { results, ...(recovery ? { purpose: ctx.body.purpose } : {}) });
+      await ctx.audit('TEST_SEND', campaign.campaign_id, { results, ...(recovery ? { purpose: ctx.body.purpose } : {}) });
+      if (recovery) await saveTestSends(runtime, ctx.body.check_id, results);
     return { results };
   } finally { await runtime.lock.release(owner, limiter); }
 }
@@ -479,7 +481,8 @@ async function failures(ctx) {
       } catch (error) { if (!['NoSuchKey', 'NotFound'].includes(error.name)) throw error; }
     }
   }
-  return { items, cursor: end < rows.length ? Buffer.from(String(end)).toString('base64url') : null };
+  const ses_accepted_count = campaign.unknown_review ? await countAccepted(ctx.runtime, campaign) : null;
+  return { items, cursor: end < rows.length ? Buffer.from(String(end)).toString('base64url') : null, ses_accepted_count };
 }
 
 async function unknowns(ctx) {
@@ -487,8 +490,7 @@ async function unknowns(ctx) {
   const campaign = await load(ctx);
   assertStatus(campaign, ['COMPLETED', 'CANCELLED']);
   if (campaign.unknown_review?.status !== 'OPEN') throw new AppError('STATE_CONFLICT', 409, '未解決の調査がありません。');
-  // 次段階の配送記録の索引を差し込む。未確認は未受付の証拠にしない。
-  const accepted = runtime.unknownIndex ? await runtime.unknownIndex.countAccepted(campaign) : 0;
+  const accepted = runtime.unknownIndex ? await runtime.unknownIndex.countAccepted(campaign) : await countAccepted(runtime, campaign);
   if (!Number.isSafeInteger(accepted) || accepted < 0 || accepted > campaign.unknown_review.count) throw new AppError('MONITORING_UNAVAILABLE', 503, 'SESの受付を確認できません。');
   const decision = { decision: body.decision, note: redactText(body.note), by: ctx.user.sub, at: timestamp(runtime), ses_accepted_count: accepted };
   const unknown_review = { ...campaign.unknown_review, status: body.decision === 'NO_RESEND' ? 'RESOLVED' : 'OPEN', decisions: [...(campaign.unknown_review.decisions ?? []), decision] };

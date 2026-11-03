@@ -13,8 +13,17 @@ export const API_ROUTES = Object.freeze([
   ['API-14', 'GET', '/campaigns/{id}', 'campaigns.get'], ['API-14', 'PATCH', '/campaigns/{id}', 'campaigns.update'],
   ...[['API-15', 'preview'], ['API-16', 'test-send'], ['API-17', 'submit'], ['API-18', 'approve'], ['API-18', 'reject'], ['API-19', 'start'], ['API-20', 'unschedule'], ['API-21', 'pause'], ['API-21', 'resume'], ['API-21', 'cancel'], ['API-22', 'review']].map(([id, action]) => [id, 'POST', `/campaigns/{id}/${action}`, `campaigns.${action}`]),
   ['API-23', 'GET', '/campaigns/{id}/stats', 'campaigns.stats'], ['API-24', 'GET', '/campaigns/{id}/failures', 'campaigns.failures'],
-  ['API-25', 'GET', '/audit', 'audit.list'], ['API-26', 'POST', '/settings/delivery-check', 'settings.delivery-check'],
+  ['API-25', 'GET', '/audit', 'audit.list'],
+  ['API-26', 'GET', '/settings/delivery-check', 'delivery-check.get'], ['API-26', 'POST', '/settings/delivery-check', 'delivery-check.start'],
+  ['API-27', 'PUT', '/settings/delivery-check/{checkId}/cases/{caseId}', 'delivery-check.case'],
+  ['API-28', 'POST', '/settings/delivery-check/{checkId}/evidence', 'delivery-check.evidence'],
+  ['API-29', 'POST', '/settings/delivery-check/{checkId}/submit', 'delivery-check.submit'],
   ['API-30', 'POST', '/campaigns/{id}/unknowns', 'campaigns.unknowns'],
+  ['API-31', 'POST', '/contacts/events', 'contacts.events'],
+  ['API-32', 'GET', '/staff', 'staff.list'], ['API-32', 'POST', '/staff', 'staff.create'],
+  ['API-33', 'POST', '/staff/{username}/{action}', 'staff.change'],
+  ['API-34', 'GET', '/readiness', 'readiness.get'],
+  ['API-35', 'POST', '/imports/{importId}/confirm', 'imports.confirm'], ['API-35', 'POST', '/imports/{importId}/discard', 'imports.discard'],
 ].map(([id, method, path, operation]) => Object.freeze({ id, method, path, operation })));
 
 export function resolveRoute(method, path, { prefix = '/api/v1' } = {}) {

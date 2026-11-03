@@ -5,9 +5,10 @@ import * as send from './views/send.js';
 import * as contacts from './views/contacts.js';
 import * as history from './views/history.js';
 import * as settings from './views/settings.js';
+import * as staff from './views/staff.js';
 
 export function parseRoute(hash) {
-  const route = /^#\/(send|contacts|history|settings)(?:\/([0-9A-HJKMNP-TV-Z]{26}))?$/.exec(hash);
+  const route = /^#\/(send|contacts|history|settings|staff)(?:\/([0-9A-HJKMNP-TV-Z]{26}))?$/.exec(hash);
   if (!route || route[2] && route[1] !== 'send') return { view: 'send', id: undefined };
   return { view: route[1], id: route[2] };
 }
@@ -59,6 +60,7 @@ export async function boot({ doc = document, location = window.location, history
     doc.getElementById('organization').textContent = user.organization_name || '配信組織の設定は管理者が行ってください';
     doc.getElementById('identity').textContent = `${user.name || 'ログイン中'} ／ ${user.roles.map((role) => labels[role]).filter(Boolean).join('・')}`;
     doc.getElementById('navigation').hidden = false;
+    doc.querySelector('[data-staff-link]').hidden = !user.roles.includes('admin');
     doc.getElementById('logout').hidden = false;
   }
 
@@ -130,8 +132,8 @@ export async function boot({ doc = document, location = window.location, history
         if (link.hash === `#/${selected.view}`) link.setAttribute('aria-current', 'page');
         else link.removeAttribute('aria-current');
       }
-      doc.title = `HT2｜${{ send: '配信', contacts: '宛先', history: '配信履歴', settings: '設定' }[selected.view]}`;
-      await { send, contacts, history, settings }[selected.view].mount(ctx, selected.id);
+      doc.title = `HT2｜${{ send: '配信', contacts: '宛先', history: '配信履歴', settings: '設定', staff: 'スタッフ' }[selected.view]}`;
+      await { send, contacts, history, settings, staff }[selected.view].mount(ctx, selected.id);
       if (current !== sequence) return;
       root.setAttribute('aria-busy', 'false');
       root.focus({ preventScroll: true });

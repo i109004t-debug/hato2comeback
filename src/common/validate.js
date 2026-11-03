@@ -112,7 +112,7 @@ export const routeSchemas = Object.freeze({
   'campaigns.get': empty,
   'campaigns.update': record({ version, ...draft }, ['version']),
   'campaigns.preview': empty,
-  'campaigns.test-send': record({ purpose: enumeration('ACCEPTANCE_RECOVERY'), note }, []),
+  'campaigns.test-send': record({ purpose: enumeration('ACCEPTANCE_RECOVERY'), note, check_id: string(26, 26, { pattern: /^[0-9A-HJKMNP-TV-Z]{26}$/ }) }, []),
   'campaigns.submit': record(approvalScope, ['max_recipients', 'send_by']),
   'campaigns.approve': record({ content_sha256: hash, ...approvalScope }, ['content_sha256', 'max_recipients', 'send_by']),
   'campaigns.reject': record({ reason: note }),
@@ -126,7 +126,18 @@ export const routeSchemas = Object.freeze({
   'campaigns.failures': empty,
   'campaigns.unknowns': record({ decision: enumeration('NO_RESEND', 'HOLD'), note: { ...plainText(1, 500), check: (value) => value.trim().length > 0 } }),
   'audit.list': empty,
-  'settings.delivery-check': record({ passed: boolean, note, evidence_key: evidence, cases: { type: 'map', key: string(4, 4, { pattern: /^T-\d{2}$/ }), values: enumeration('PASS', 'FAIL'), min: 1 }, config_hash: hash, dns_config_hash: hash }),
+  'contacts.events': record({ email }),
+  'imports.confirm': record({ version }),
+  'imports.discard': record({ version }),
+  'delivery-check.get': empty,
+  'delivery-check.start': empty,
+  'delivery-check.case': record({ result: enumeration('PASS', 'FAIL', 'NA'), note }),
+  'delivery-check.evidence': record({ case_id: string(4, 4, { pattern: /^T-\d{2}$/ }), file_name: plainText(1, 255), content_base64: string(1, 1398104) }),
+  'delivery-check.submit': record({ note }),
+  'staff.list': empty,
+  'staff.create': record({ email, name: plainText(1, 50), roles: array(enumeration('admin', 'sender', 'approver', 'viewer'), 1, 4) }),
+  'staff.change': record({ roles: array(enumeration('admin', 'sender', 'approver', 'viewer'), 1, 4) }, []),
+  'readiness.get': empty,
 });
 
 export function validateSchema(schema, input, context = {}) {
@@ -208,6 +219,7 @@ export function validateRoute(route, input, context = {}) {
   const value = assertResult(validateSchema(routeSchemas[route], input, context));
   if (route === 'contacts.create') Object.assign(value, normalizeEmail(input.email));
   if (route === 'campaigns.test-send' && (Object.hasOwn(value, 'purpose') !== Object.hasOwn(value, 'note'))) throw invalid('note', 'REQUIRED');
+  if (route === 'campaigns.test-send' && (Object.hasOwn(value, 'purpose') !== Object.hasOwn(value, 'check_id'))) throw invalid('check_id', 'REQUIRED');
   if (route === 'imports.create' && Buffer.byteLength(value) > 2 * 1024 * 1024) throw new AppError('PAYLOAD_TOO_LARGE', 413, 'CSVが大きすぎます。');
   if (route === 'contacts.update' && !Object.hasOwn(value, 'name') && !Object.hasOwn(value, 'topics')) throw invalid('body', 'EMPTY_UPDATE');
   if (route === 'campaigns.update' && !Object.keys(draft).some((field) => Object.hasOwn(value, field))) throw invalid('body', 'EMPTY_UPDATE');
@@ -220,7 +232,12 @@ export function validateRoute(route, input, context = {}) {
 }
 
 export function validateParams(params) {
-  for (const value of Object.values(params)) if (!isUlid(value)) throw invalid('id', 'ULID');
+  for (const [key, value] of Object.entries(params)) {
+    if (key === 'username') { if (!/^[A-Za-z0-9_-]{1,128}$/.test(value)) throw invalid('username'); }
+    else if (key === 'action') { if (!['roles', 'disable', 'enable', 'reset-mfa', 'reset-password'].includes(value)) throw invalid('action'); }
+    else if (key === 'caseId') { if (!/^T-\d{2}$/.test(value)) throw invalid('case_id'); }
+    else if (!isUlid(value)) throw invalid('id', 'ULID');
+  }
   return params;
 }
 
@@ -228,9 +245,10 @@ export function validateQuery(route, query = {}) {
   const list = ['contacts.list', 'imports.list', 'campaigns.list', 'campaigns.failures', 'audit.list'];
   const properties = list.includes(route) ? { limit: string(1, 2, { pattern: /^(?:[1-9]|[1-4]\d|50)$/ }), cursor: string(1, 16384, { pattern: /^[A-Za-z0-9_-]+$/ }) } : {};
   if (route === 'campaigns.get') Object.assign(properties, { send_by: scopeTime, send_after: scopeTime });
+  if (route === 'imports.create') properties.mode = enumeration('NEW_ONLY', 'UPDATE_EXISTING');
   if (route === 'contacts.list') Object.assign(properties, { topic, status: enumeration('OPT_IN', 'OPT_OUT') });
   if (route === 'audit.list') properties.month = string(6, 6, { pattern: /^\d{4}(?:0[1-9]|1[0-2])$/ });
-  const value = assertResult(validateSchema(record(properties, route === 'audit.list' ? ['month'] : []), query));
+  const value = assertResult(validateSchema(record(properties, route === 'audit.list' ? ['month'] : route === 'imports.create' ? ['mode'] : []), query));
   if (list.includes(route)) value.limit = value.limit ? Number(value.limit) : 50;
   return value;
 }

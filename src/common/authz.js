@@ -8,11 +8,11 @@ const approvers = ['admin', 'approver'];
 const operators = ['admin', 'sender', 'approver'];
 
 export const PERMISSIONS = Object.freeze(Object.fromEntries([
-  [all, ['me.get', 'settings.get', 'topics.list', 'contacts.list', 'contacts.get', 'campaigns.list', 'campaigns.get', 'campaigns.stats', 'campaigns.failures']],
-  [senders, ['contacts.create', 'contacts.update', 'contacts.unsubscribe', 'imports.create', 'imports.list', 'imports.get', 'campaigns.create', 'campaigns.update', 'campaigns.test-send', 'campaigns.submit', 'campaigns.start', 'campaigns.unschedule']],
+  [all, ['me.get', 'settings.get', 'topics.list', 'contacts.list', 'contacts.get', 'campaigns.list', 'campaigns.get', 'campaigns.stats', 'campaigns.failures', 'readiness.get']],
+  [senders, ['contacts.create', 'contacts.update', 'contacts.unsubscribe', 'contacts.events', 'imports.create', 'imports.list', 'imports.get', 'imports.confirm', 'imports.discard', 'campaigns.create', 'campaigns.update', 'campaigns.test-send', 'campaigns.submit', 'campaigns.start', 'campaigns.unschedule']],
   [approvers, ['campaigns.approve', 'campaigns.reject']],
   [operators, ['campaigns.preview', 'campaigns.pause', 'campaigns.cancel', 'campaigns.resume']],
-  [['admin'], ['settings.update', 'settings.delivery-check', 'contacts.reconsent', 'contacts.erase', 'campaigns.review', 'campaigns.unknowns', 'audit.list']],
+  [['admin'], ['settings.update', 'delivery-check.get', 'delivery-check.start', 'delivery-check.case', 'delivery-check.evidence', 'delivery-check.submit', 'staff.list', 'staff.create', 'staff.change', 'contacts.reconsent', 'contacts.erase', 'campaigns.review', 'campaigns.unknowns', 'audit.list']],
 ].flatMap(([roles, operations]) => operations.map((operation) => [operation, Object.freeze([...roles])]))));
 
 export function authorize(user, operation, { pause_reason } = {}) {

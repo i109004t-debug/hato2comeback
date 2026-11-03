@@ -80,6 +80,19 @@ test('9.5 401だけ一度更新して同じ本文で再要求する', async () =
   assert.equal(f.calls[0][1].body, f.calls[1][1].body);
 });
 
+test('11.6 REAUTH_REQUIREDでは要求もトークン更新も繰り返さず、ログアウトからログインへ進む', async () => {
+  let logouts = 0;
+  const f = fixture(async () => response(401, { error_code: 'REAUTH_REQUIRED' }), { logout: async () => { logouts += 1; } });
+  await assert.rejects(f.api.request('/staff/other-admin/disable', { method: 'POST', body: {} }), { code: 'REAUTH_REQUIRED', status: 401 });
+  assert.equal(f.calls.length, 1); assert.equal(f.counts.refresh, 0); assert.equal(logouts, 1);
+});
+
+test('第11段階 API-26〜35は既知のパスと内部識別子だけを許す', () => {
+  for (const path of ['/readiness', '/staff', '/staff/uuid-123/reset-mfa', '/contacts/events', `/settings/delivery-check/${id}/cases/T-25`, `/settings/delivery-check/${id}/evidence`, `/settings/delivery-check/${id}/submit`, `/imports/${id}/confirm`, `/imports/${id}/discard`]) assert.equal(apiPath(path), path);
+  assert.equal(apiPath('/imports', { mode: 'UPDATE_EXISTING' }), '/imports?mode=UPDATE_EXISTING');
+  for (const path of ['/staff/member@example.com/disable', '/staff/uuid-123/delete', '/staff/uuid-123/roles/extra', `/settings/delivery-check/${id}/cases/anything`, `/imports/${id}/replay`]) assert.throws(() => apiPath(path));
+});
+
 test('9.5 二度目の401で保存値を破棄し再ログインへ進む', async () => {
   const f = fixture(async () => response(401, {}));
   await assert.rejects(f.api.request('/me'), (error) => error.code === 'UNAUTHENTICATED');

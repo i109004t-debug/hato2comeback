@@ -19,6 +19,40 @@ const resources = blocks(main);
 const outputs = blocks(main, 'Outputs');
 const scripts = readdirSync(new URL('../../scripts/', import.meta.url)).filter((f) => f.endsWith('.sh'));
 
+test('第11段階 8.5 SESの3発行先と既定バスのルール、呼出し元を制約した許可を定義する', () => {
+  for (const name of ['CloudWatchDestination', 'FirehoseDestination', 'EventBridgeDestination']) {
+    assert.match(resources[name], /Enabled: true/);
+    for (const event of REQUIRED_EVENTS) assert.ok(resources[name].includes(event));
+  }
+  assert.match(resources.EventBridgeDestination, /EventBusArn: !Sub 'arn:\$\{AWS::Partition\}:events:\$\{AWS::Region\}:\$\{AWS::AccountId\}:event-bus\/default'/);
+  assert.match(resources.SesEventsRule, /source: \[aws.ses\]/);
+  assert.match(resources.SesEventsRule, /'ses:configuration-set': \[!Sub 'ht2-\$\{Env\}'\]/);
+  assert.match(resources.SesEventsRule, /Arn: !GetAtt EventsFunction.Arn/);
+  for (const text of ['AWS::Lambda::Permission', 'FunctionName: !Ref EventsFunction', 'Principal: events.amazonaws.com', 'SourceArn: !GetAtt SesEventsRule.Arn', "SourceAccount: !Ref 'AWS::AccountId'"]) assert.ok(resources.EventsInvokePermission.includes(text), text);
+});
+
+test('第11段階 12.6 EventsFunctionのロールは同じテーブルのADDR#*へのPutItemだけ', () => {
+  assert.deepEqual([...allowed(resources.EventsRole)], ['dynamodb:PutItem']);
+  assert.match(resources.EventsRole, /Resource: !GetAtt Table.Arn/);
+  assert.match(resources.EventsRole, /'ForAllValues:StringLike': \{'dynamodb:LeadingKeys': \['ADDR#\*'\]\}/);
+  assert.doesNotMatch(resources.EventsRole, /ManagedPolicyArns|Resource: '\*'|ses:|secretsmanager:|sns:|s3:|dynamodb:(?:GetItem|UpdateItem|Query|DeleteItem)/);
+  assert.match(resources.EventsFunction, /Handler: src\/events\/handler.handler/);
+  assert.match(resources.EventsFunction, /Role: !GetAtt EventsRole.Arn/);
+});
+
+test('第11段階 12.6 Cognito追加権限はユーザープールだけ、証跡の書込と取込の削除は接頭辞だけ', () => {
+  const statement = resources.ApiPolicy.split(/\n          - /).find((part) => part.includes('cognito-idp:'));
+  const expected = ['AdminGetUser', 'AdminListGroupsForUser', 'ListUsersInGroup', 'AdminCreateUser', 'AdminAddUserToGroup', 'AdminRemoveUserFromGroup', 'AdminDisableUser', 'AdminEnableUser', 'AdminUserGlobalSignOut', 'AdminSetUserMFAPreference', 'AdminResetUserPassword'];
+  assert.deepEqual([...statement.matchAll(/cognito-idp:([A-Za-z]+)/g)].map((item) => item[1]), expected);
+  assert.match(statement, /Resource: !GetAtt UserPool.Arn/);
+  assert.doesNotMatch(resources.ApiPolicy, /cognito-idp:(?:AdminDeleteUser|UpdateUserPool|DeleteUserPool|\*)/);
+  const put = resources.ApiPolicy.split(/\n          - /).find((part) => part.includes("Action: ['s3:PutObject']"));
+  assert.match(put, /Resource: \[!Sub '\$\{DataBucket.Arn\}\/imports\/staging\/\*', !Sub '\$\{DataBucket.Arn\}\/delivery-checks\/\*'\]/);
+  const deletion = resources.ApiPolicy.split(/\n          - /).find((part) => part.includes("Action: ['s3:DeleteObject']"));
+  assert.match(deletion, /Resource: \[!Sub '\$\{DataBucket.Arn\}\/recipients\/\*', !Sub '\$\{DataBucket.Arn\}\/imports\/staging\/\*'\]/);
+  assert.match(resources.DataBucket, /Prefix: imports\/preview\/, ExpirationInDays: 7/);
+});
+
 test('第9段階 4.6 監査保管庫はObject Lock・保持・暗号化・公開ブロック・TLSを持つ', () => {
   const parameters = blocks(main, 'Parameters');
   assert.match(parameters.AuditLockMode, /Default: GOVERNANCE\n    AllowedValues: \[GOVERNANCE, COMPLIANCE\]/);
@@ -76,7 +110,7 @@ test('第9段階 15.5 全LambdaでFunctionUpdateを既定とし、ARN指定時�
   assert.match(blocks(main, 'Parameters').RuntimeVersionArn, /Default: ''/);
   assert.match(main, /HasRuntimeVersion: !Not \[!Equals \[!Ref RuntimeVersionArn, ''\]\]/);
   const functions = Object.values(resources).filter((resource) => resource.includes('Type: AWS::Lambda::Function\n'));
-  assert.equal(functions.length, 3);
+  assert.equal(functions.length, 4);
   for (const fn of functions) assert.match(fn, /RuntimeManagementConfig: !If\n        - HasRuntimeVersion\n        - \{UpdateRuntimeOn: Manual, RuntimeVersionArn: !Ref RuntimeVersionArn\}\n        - \{UpdateRuntimeOn: FunctionUpdate\}/);
 });
 
@@ -213,7 +247,7 @@ const apiOperations = {
   ses: 'GetAccount GetEmailIdentity GetConfigurationSet GetConfigurationSetEventDestinations GetContactList ListContacts GetContact CreateContact UpdateContact DeleteContact GetSuppressedDestination GetImportJob CreateEmailTemplate GetEmailTemplate TestRenderEmailTemplate SendEmail',
   ddb: 'GetItem PutItem UpdateItem Query TransactWriteItems', s3: 'PutObject GetObject HeadObject DeleteObject', sns: 'Publish',
   sfn: 'StartExecution DescribeExecution SendTaskSuccess SendTaskFailure', scheduler: 'CreateSchedule DeleteSchedule GetSchedule',
-  cognito: 'AdminGetUser AdminListGroupsForUser', cloudwatch: 'GetMetricData DescribeAlarms', ssm: 'GetParameter', secrets: 'GetSecretValue', lambda: 'Invoke',
+  cognito: 'AdminGetUser AdminListGroupsForUser ListUsersInGroup AdminCreateUser AdminAddUserToGroup AdminRemoveUserFromGroup AdminDisableUser AdminEnableUser AdminUserGlobalSignOut AdminSetUserMFAPreference AdminResetUserPassword', cloudwatch: 'GetMetricData DescribeAlarms', ssm: 'GetParameter', secrets: 'GetSecretValue', lambda: 'Invoke',
 };
 const workerOperations = {
   kms: 'GenerateMac DescribeKey',
@@ -371,6 +405,28 @@ function preserveWebConfig(t) {
     else rmSync(path, { force: true });
   });
 }
+
+test('第11段階 staff.shは確認文字列と内部Usernameを使い、CRLFを除いて管理者を作成する', () => {
+  const result = runScript('staff.sh', ['dev', 'create-admin', 'admin@example.com', '運営者'], { MOCK_STAFF_USERNAME: 'staff-uuid\r' }, 'create-admin 111111111111\n');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.calls, /cognito-idp admin-create-user .*--user-pool-id ap-northeast-1_example --username admin@example.com/);
+  assert.match(result.calls, /cognito-idp admin-add-user-to-group .*--username staff-uuid --group-name admin/);
+  assert.doesNotMatch(result.calls, /\r|--temporary-password|admin-delete-user|update-user-pool/);
+  const rejected = runScript('staff.sh', ['dev', 'create-admin', 'admin@example.com', '運営者'], {}, 'wrong\n');
+  assert.notEqual(rejected.status, 0); assert.doesNotMatch(rejected.calls, /admin-create-user/);
+});
+
+test('第11段階 staff.shの復旧はMFA無効化の後にサインアウトし、有効化は専用APIだけを使う', () => {
+  const mfa = runScript('staff.sh', ['dev', 'reset-mfa', 'staff-uuid'], {}, 'reset-mfa 111111111111 staff-uuid\n');
+  assert.equal(mfa.status, 0, mfa.stderr);
+  assert.match(mfa.calls, /admin-set-user-mfa-preference .*Enabled=false,PreferredMfa=false[\s\S]*admin-user-global-sign-out/);
+  const enabled = runScript('staff.sh', ['dev', 'enable', 'staff-uuid'], {}, 'enable 111111111111 staff-uuid\n');
+  assert.equal(enabled.status, 0, enabled.stderr); assert.match(enabled.calls, /admin-enable-user/);
+  for (const [action, username] of [['enable', 'member@example.com'], ['delete', 'staff-uuid']]) {
+    const rejected = runScript('staff.sh', ['dev', action, username]);
+    assert.notEqual(rejected.status, 0); assert.doesNotMatch(rejected.calls, /cognito-idp/);
+  }
+});
 
 for (const state of ['QUEUED', 'SENDING', 'SCHEDULED']) test(`T-68 deployは${state}の配信IDを出し、変更セット作成前に止まる`, () => {
   const epoch = 1793664000;
@@ -680,19 +736,25 @@ test('第6段階の資料は現行の構築・画面・鍵・イベント手順�
   for (const term of ['OptIn/OptOut', 'OPT_IN/OPT_OUT', 'topicSubscriptionStatus', 'topicDefaultSubscriptionStatus', 'AttributesData', 'UTF-8', 'base64として復号しない', '存在しない場合だけ']) assert.ok(operations.includes(term), term);
 });
 
-test('第8段階8 WAF除外はPOST /api/v1/importsの64KiB超だけ', () => {
+test('12.3 WAF除外はPOSTの取込と受入証跡の64KiB超だけ', () => {
   for (const name of ['Common', 'KnownBadInputs']) {
     const rule = edge.split(`        - Name: ${name}\n`)[1].split('\n        - Name: ')[0];
     assert.match(rule, /ScopeDownStatement:\n\s+NotStatement:\n\s+Statement:\n\s+AndStatement:\n\s+Statements:/);
-    assert.equal((rule.match(/ByteMatchStatement:/g) ?? []).length, 2);
+    assert.equal((rule.match(/ByteMatchStatement:/g) ?? []).length, 4);
     const method = /FieldToMatch: \{Method: \{\}\}\n\s+PositionalConstraint: EXACTLY\n\s+SearchString: (\S+)/.exec(rule)?.[1];
     const path = /FieldToMatch: \{UriPath: \{\}\}\n\s+PositionalConstraint: EXACTLY\n\s+SearchString: (\S+)/.exec(rule)?.[1];
     const size = Number(/ComparisonOperator: GT\n\s+Size: (\d+)/.exec(rule)?.[1]);
-    const excluded = (verb, uri, bytes) => verb === method && uri === path && bytes > size;
+    const prefix = /PositionalConstraint: STARTS_WITH\n\s+SearchString: (\S+)/.exec(rule)?.[1];
+    const suffix = /PositionalConstraint: ENDS_WITH\n\s+SearchString: (\S+)/.exec(rule)?.[1];
+    assert.equal(prefix, '/api/v1/settings/delivery-check/'); assert.equal(suffix, '/evidence');
+    const excluded = (verb, uri, bytes) => verb === method && (uri === path || uri.startsWith(prefix) && uri.endsWith(suffix)) && bytes > size;
     assert.equal(excluded('POST', '/api/v1/imports', 65537), true);
+    assert.equal(excluded('POST', '/api/v1/settings/delivery-check/01K9542S00AAAAAAAAAAAAAAAA/evidence', 1398200), true);
     for (const [verb, uri, bytes] of [
       ['POST', '/api/v1/imports', 65536], ['GET', '/api/v1/imports', 65537], ['PUT', '/api/v1/imports', 65537],
       ['POST', '/api/v1/imports/id', 65537], ['POST', '/api/v1/imports/', 65537], ['POST', '/api/v1/campaigns', 100000], ['POST', '/', 100000],
+      ['POST', '/api/v1/settings/delivery-check/id/submit', 100000], ['PUT', '/api/v1/settings/delivery-check/id/evidence', 100000],
+      ['POST', '/api/v1/settings/delivery-check/id/evidence', 65536], ['POST', '/api/v1/settings/delivery-check/id/evidence/', 100000],
     ]) assert.equal(excluded(verb, uri, bytes), false, `${name} ${verb} ${uri} ${bytes}`);
   }
 });

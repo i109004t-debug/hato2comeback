@@ -38,9 +38,9 @@ export function topicSummary(contact, topics) {
   }).join('、');
 }
 
-export const IMPORT_STATUSES = Object.freeze({ RECEIVED: '受付済み', VALIDATING: '検証中', SUBMITTING: '登録の受付を確認中', IMPORTING: '取込中', DONE: '完了', FAILED: '失敗', NEEDS_REVIEW: '要確認（管理者が確認してください）' });
+export const IMPORT_STATUSES = Object.freeze({ RECEIVED: '受付済み', VALIDATING: '検証中', PREVIEW: '確認待ち（24時間以内に反映してください）', APPLYING: '更新を反映中', DISCARDED: '取りやめ', EXPIRED: '確認の期限切れ', SUBMITTING: '登録の受付を確認中', IMPORTING: '取込中', DONE: '完了', FAILED: '失敗', NEEDS_REVIEW: '要確認（管理者が確認してください）' });
 const ROW_REASONS = Object.freeze({ DUPLICATE_IN_FILE: 'ファイル内の重複', EXISTING_SKIPPED: '登録済みのため変更しません', ERASED_SKIPPED: '完全削除済みのため登録しません', NOT_ALLOWED_IN_ENV: 'この環境で許可されていない宛先', INVALID_ADDRESS: 'メールアドレスの形式が不正', NONSTANDARD_ADDRESS: '登録できない形式のメールアドレス', INVALID_REQUEST: '入力の形式が不正', ATTRIBUTES_TOO_LARGE: '同意などの情報が大きすぎます' });
-export const importReason = (code) => ROW_REASONS[code] ?? '行の形式・同意の記録・配信リストを確認してください。';
+export const importReason = (code) => ({ UPDATED: '名前か停止を更新', UNCHANGED: '変更なし', NOT_FOUND: '登録されていないため変更しません', ERASED: '完全削除済み', INVALID: '形式または確認後の状態変更のため反映しません', READY: '新規登録の対象', PREVIEW_CHANGED: '確認後に状態が変わったため反映しません' }[code] ?? ROW_REASONS[code] ?? '行の形式・同意の記録・配信リストを確認してください。');
 
 export async function mount(ctx) {
   const root = clone('contacts-template');
@@ -50,6 +50,7 @@ export async function mount(ctx) {
   let cursor;
   let importCursor;
   let importId;
+  let previewRecord;
   let importKey;
   let uncertain = false;
   let filters = {};
@@ -74,6 +75,7 @@ export async function mount(ctx) {
     q('[data-imports-next]').disabled = gate.busy || !importCursor;
     q('[data-contact-submit]').disabled = gate.busy || uncertain || !writable();
     q('[data-import-submit]').disabled = gate.busy || uncertain || !writable();
+    for (const control of q('[data-import-decisions]').querySelectorAll('button')) control.disabled = gate.busy || uncertain || !writable();
     setText(root, '[data-role-note]', isMasked(ctx.user) ? '閲覧者にはアドレスの一部を伏せて表示します。詳細は完全一致検索で確認できます。' : writable() ? '追加購読には同意の記録が必要です。退会の連絡を受けたときは全停止にしてください。' : '宛先の閲覧だけができます。登録・購読の変更は管理者・配信担当が行います。');
     if (uncertain) setText(root, '[data-role-note]', '操作の結果を確認できません。操作を繰り返さず、画面を読み込み直して宛先・取込結果を確認してください。');
   }
@@ -89,8 +91,10 @@ export async function mount(ctx) {
   }
 
   async function detail(email) {
-    const contact = await ctx.api.request('/contacts/get', { method: 'POST', body: { email } });
+    const contact = await ctx.api.request(writable() ? '/contacts/events' : '/contacts/get', { method: 'POST', body: { email } });
     q('[data-contact-detail]').hidden = false;
+    q('[data-delivery-events]').hidden = !writable();
+    if (writable()) tableRows(q('[data-events-rows]'), (contact.events ?? []).map((item) => [formatTime(item.occurred_at), { Send: 'SESの受付', Delivery: '相手サーバーへ配送', Bounce: 'バウンス', Complaint: '苦情', DeliveryDelay: '配送遅延', Reject: '拒否', Subscription: '購読変更', RenderingFailure: '本文の作成失敗' }[item.type] ?? '要確認', item.campaign_id, [item.bounce_type, item.delay_type, item.complaint_type, item.diagnostic_code, ...(item.subscription?.topics ?? []).map((entry) => `${entry.topic}：${entry.status === 'OPT_OUT' ? '停止' : '購読'}`), ...(item.subscription?.unsubscribe_all ? ['全停止'] : [])].filter(Boolean).join('／')]));
     setText(root, '[data-detail-address]', visibleAddress(contact.EmailAddress, ctx.user));
     let attrs = {};
     if (!isMasked(ctx.user)) { try { attrs = JSON.parse(contact.AttributesData ?? '{}'); } catch { /* 不正な属性は画面へ反射しない。 */ } }
@@ -124,13 +128,17 @@ export async function mount(ctx) {
   async function importResult(id) {
     const record = await ctx.api.request(`/imports/${id}`);
     importId = id;
+    previewRecord = record.status === 'PREVIEW' ? record : undefined;
+    q('[data-import-decisions]').hidden = !previewRecord;
     setText(root, '[data-import-status]', `取込ID：${id}／${IMPORT_STATUSES[record.status] ?? '状態を確認できません'}`);
     const report = record.report ?? record;
-    const values = [['全行', report.total], ['登録対象', report.ready], ['処理済み', record.processed], ['登録失敗', record.failed], ['登録しなかった行', report.rows?.length]];
+    const values = [['全行', report.total], ['登録・更新の対象', report.ready], ['処理済み', record.processed], ['登録失敗', record.failed], ['対象外の行', Math.max(0, (report.total ?? 0) - (report.ready ?? 0))]];
     q('[data-import-counts]').replaceChildren(...values.flatMap(([label, value]) => [element('dt', label), element('dd', formatCount(value))]));
-    tableRows(q('[data-import-rows]'), (report.rows ?? []).map((row) => [row.row, importReason(row.code)]));
+    const summary = Object.entries(report.summary ?? record.summary ?? {}).map(([code, count]) => `${code}：${formatCount(count)}件`).join('／');
+    setText(root, '[data-import-changes]', `${summary}${record.mode === 'UPDATE_EXISTING' ? `／変わる項目：名前 ${formatCount(report.changes?.name ?? record.changes?.name)}件・停止 ${formatCount(report.changes?.stop ?? record.changes?.stop)}件` : ''}${record.preview_expires_at ? `／確認期限 ${formatTime(record.preview_expires_at)}` : ''}`);
+    tableRows(q('[data-import-rows]'), (report.rows ?? []).map((row) => [row.row, row.code, importReason(row.code)]));
     if (record.error_code) showMessage(root, errorText(new ApiError(record.error_code)), true);
-    if (['DONE', 'FAILED', 'NEEDS_REVIEW'].includes(record.status)) importId = undefined;
+    if (['DONE', 'FAILED', 'NEEDS_REVIEW', 'DISCARDED', 'EXPIRED'].includes(record.status)) importId = undefined;
   }
 
   async function imports(next) {
@@ -174,20 +182,31 @@ export async function mount(ctx) {
     }, true);
   });
   on(root, '[data-import-form] input', 'change', () => { importKey = crypto.randomUUID(); });
+  on(root, '[data-import-form] select', 'change', () => { importKey = crypto.randomUUID(); });
+  for (const action of ['confirm', 'discard']) on(root, `[data-import-${action}]`, 'click', () => {
+    if (!previewRecord || uncertain || !writable()) return;
+    const record = previewRecord;
+    perform(async () => {
+      if (!await confirmDialog(action === 'confirm' ? '件数と変わる項目を確認して反映します。購読の追加や再開は行いません。' : '取込を取りやめ、受け取ったファイルを削除します。')) return;
+      await ctx.api.request(`/imports/${record.import_id}/${action}`, { method: 'POST', body: { version: record.version } });
+      await importResult(record.import_id); await imports();
+    }, true);
+  });
   q('[data-import-form]').addEventListener('submit', (event) => {
     event.preventDefault();
     if (!writable() || uncertain) return;
     const file = event.currentTarget.elements.file.files[0];
+    const mode = event.currentTarget.elements.mode.value;
     perform(async () => {
       if (!file) throw new ApiError('INVALID_REQUEST');
       if (file.size > 2 * 1024 * 1024) throw new ApiError('PAYLOAD_TOO_LARGE');
       importKey ??= crypto.randomUUID();
       let csv;
       try { csv = new TextDecoder('utf-8', { fatal: true }).decode(await file.arrayBuffer()); } catch { throw new ApiError('INVALID_REQUEST'); }
-      const result = await ctx.api.request('/imports', { method: 'POST', csv, idempotencyKey: importKey });
+      const result = await ctx.api.request('/imports', { method: 'POST', query: { mode }, csv, idempotencyKey: importKey });
       await importResult(result.import_id);
       await imports();
-      showMessage(root, 'CSVの取込を受け付けました。取込結果を確認してください。');
+      showMessage(root, 'CSVの検査を受け付けました。確認画面で件数を確かめてから反映してください。');
     }, true);
   });
   renderPermissions();

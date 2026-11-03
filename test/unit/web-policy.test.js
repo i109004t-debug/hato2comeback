@@ -56,7 +56,7 @@ test('schedule selection is available only when approved and recovery requires a
   assert.deepEqual(testSendInput(user('sender'), false), {});
   assert.throws(() => testSendInput(user('sender'), true, 'check'), { code: 'FORBIDDEN' });
   assert.throws(() => testSendInput(user('admin'), true, ' '), { code: 'INVALID_REQUEST' });
-  assert.deepEqual(testSendInput(user('admin'), true, ' recheck '), { purpose: 'ACCEPTANCE_RECOVERY', note: 'recheck' });
+  assert.deepEqual(testSendInput(user('admin'), true, ' recheck ', '01K9542S00AAAAAAAAAAAAAAAA'), { purpose: 'ACCEPTANCE_RECOVERY', note: 'recheck', check_id: '01K9542S00AAAAAAAAAAAAAAAA' });
 });
 
 test('UI-09 下書きは管理者・配信担当だけが保存後に申請できる', () => {

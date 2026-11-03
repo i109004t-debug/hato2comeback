@@ -11,7 +11,8 @@ const runImport = async (f, csv) => {
   const response = await f.receive(csv);
   assert.equal(response.statusCode, 202, response.body);
   const import_id = response.json.import_id;
-  return { id: import_id, result: await f.worker({ mode: 'import', import_id }, f.context) };
+  await f.worker({ mode: 'import', import_id }, f.context);
+  return { id: import_id, result: await f.confirmImport(import_id) };
 };
 
 test('API-11 同じIdempotency-Keyは同一ID、S3保存・非同期起動は一回', async () => {
@@ -45,7 +46,7 @@ test('T-16 CSV内の停止済み既存宛先は除外し、既存の解除操作
   f.settings.nonprod_allowlist.push('new@example.com');
   const { id } = await runImport(f, f.importCsv(f.addresses[0], 'new@example.com,新規,2026-01-01T00:00:00Z,フォーム,news\n'));
   const report = JSON.parse(f.files.get(`imports/report/${id}.json`));
-  assert.deepEqual(report.rows, [{ row: 2, code: 'EXISTING_SKIPPED' }]);
+  assert.deepEqual(report.rows, [{ row: 2, code: 'EXISTING_SKIPPED' }, { row: 3, code: 'READY' }]);
   assert.ok(!f.files.get(`imports/ready/${id}.jsonl`).includes(f.addresses[0]));
   assert.equal(f.contacts[0].UnsubscribeAll, true); assert.equal(f.changes.length, 0);
   assert.equal((await f.request('POST /contacts/unsubscribe', { email: f.addresses[1], scope: 'ALL' })).statusCode, 200);
@@ -70,7 +71,7 @@ test('T-18 Gmail別表記のCSVは一件だけ、SES JSON Linesで全トピッ�
   assert.equal(rows[0].unsubscribeAll, false);
   assert.deepEqual(rows[0].topicPreferences, [{ topicName: 'news', subscriptionStatus: 'OPT_IN' }, { topicName: 'event', subscriptionStatus: 'OPT_OUT' }]);
   const report = JSON.parse(f.files.get(`imports/report/${id}.json`));
-  assert.deepEqual(report.rows, [{ row: 3, code: 'DUPLICATE_IN_FILE' }]);
+  assert.deepEqual(report.rows, [{ row: 2, code: 'READY' }, { row: 3, code: 'DUPLICATE_IN_FILE' }]);
   assert.ok(!JSON.stringify(report).includes('@'));
   const job = [...f.jobs.values()][0];
   assert.equal(job.input.ImportDestination.ContactListDestination.ContactListImportAction, 'PUT');
@@ -104,7 +105,8 @@ test('5.4 取込作成の応答不明は再試行も排他解放もしない', a
   let calls = 0;
   f.deps.ses.createImportJob = async () => { calls += 1; throw failure('TimeoutError'); };
   const received = await f.receive(f.importCsv()); const import_id = received.json.import_id;
-  await assert.rejects(f.worker({ mode: 'import', import_id }), { code: 'INTERNAL' });
+  await f.worker({ mode: 'import', import_id });
+  await assert.rejects(f.confirmImport(import_id), { code: 'INTERNAL' });
   assert.equal(f.ddb.get('IMPORT', import_id).status, 'NEEDS_REVIEW');
   assert.equal(f.ddb.get('LOCK', 'CONTACT_CREATE').owner, import_id);
   await f.worker({ mode: 'import', import_id }); assert.equal(calls, 1);
@@ -127,10 +129,11 @@ test('5.4 完全削除と属性正本は100キー以内で照合し、既存宛�
   f.ddb.batchGetItem = async (input) => { batchCalls += 1; return original(input); };
   f.contactPages = [{ Contacts: [{ EmailAddress: 'u0@example.com' }], NextToken: '1' }, { Contacts: [{ EmailAddress: 'u204@example.com', UnsubscribeAll: true }] }];
   const { id } = await runImport(f, 'email,name,consent_at,consent_source,topics\n' + lines + '\n');
-  assert.equal(batchCalls, 5); assert.equal(f.listInputs.length, 2);
+  assert.equal(batchCalls, 10); assert.equal(f.listInputs.length, 4);
   const report = JSON.parse(f.files.get(`imports/report/${id}.json`));
-  assert.equal(report.ready, 203); assert.equal(report.rows.length, 2);
-  assert.ok(report.rows.every((row) => row.code === 'EXISTING_SKIPPED'));
+  assert.equal(report.ready, 203); assert.equal(report.rows.length, 205);
+  assert.equal(report.rows.filter((row) => row.code === 'EXISTING_SKIPPED').length, 2);
+  assert.equal(report.rows.filter((row) => row.code === 'READY').length, 203);
 });
 
 test('T-51 完全削除とCSVのHMAC照合は同じ排他により競合しない', async () => {
@@ -138,11 +141,12 @@ test('T-51 完全削除とCSVのHMAC照合は同じ排他により競合しな�
   const received = await f.receive(f.importCsv());
   const original = f.ddb.batchGetItem;
   let eraseResponse;
+  await f.worker({ mode: 'import', import_id: received.json.import_id });
   f.ddb.batchGetItem = async (input) => {
     eraseResponse = await f.request('POST /contacts/erase', { email: 'new@example.com', note: '同時削除' });
     return original(input);
   };
-  await f.worker({ mode: 'import', import_id: received.json.import_id });
+  await f.confirmImport(received.json.import_id);
   assert.equal(eraseResponse.json.error_code, 'CONTACT_IMPORT_IN_PROGRESS');
   assert.equal(f.ddb.get('ERASED', eraseHash('new@example.com')), undefined);
 });

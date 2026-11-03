@@ -143,6 +143,16 @@ test('13.2 全アプリメトリクスをEMFで出力し、機密情報を次元
   assert.throws(() => metrics.emit('Accepted', 1, { email: 'member@example.com' }));
 });
 
+test('4.3 一括停止の監査は既知のaddr_idを直接保存し、生のアドレスと不正IDを受け入れない', () => {
+  const input = { actor_sub: 'user', action: 'CONTACT_STOP', target: 'contact', result: 'SUCCESS', request_id: 'import', addr_id: 'a'.repeat(64), details: { scope: 'ALL', operation: 'IMPORT' } };
+  const item = createAuditItem(input);
+  assert.equal(item.addr_id, input.addr_id);
+  assert.deepEqual(item.details, input.details);
+  assert.ok(!JSON.stringify(item).includes('@'));
+  assert.throws(() => createAuditItem({ ...input, addr_id: 'member@example.com' }));
+  assert.throws(() => createAuditItem({ ...input, email: 'member@example.com' }, { hmacKey: 'key' }));
+});
+
 test('13.1〜13.2 既定出力はconsoleのJSON包絡を通さずstdoutへ1行ずつ書く', () => {
   const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
     import { createMetrics } from ${JSON.stringify(new URL('../../src/common/metrics.js', import.meta.url).href)};

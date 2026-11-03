@@ -4,7 +4,7 @@ import { managementFixture } from '../helpers/management.js';
 import { failure, ID } from '../helpers/sending.js';
 import { createPrecheck } from '../../src/common/precheck.js';
 
-const recovery = { purpose: 'ACCEPTANCE_RECOVERY', note: '設定修正後の受信ヘッダーと解除リンクを再確認する' };
+const recovery = { check_id: ID, purpose: 'ACCEPTANCE_RECOVERY', note: '設定修正後の受信ヘッダーと解除リンクを再確認する' };
 const expectCode = (response, status, code) => {
   assert.equal(response.statusCode, status, response.body);
   assert.equal(response.json.error_code, code);
@@ -15,6 +15,7 @@ const completed = (status = 'SUCCEEDED', action = 'START_FAILED') => ({ status, 
 function recoveryFixture(options = {}) {
   const f = managementFixture({ env: 'prod', count: 2, ...options });
   f.draft();
+  f.ddb.set({ PK: 'ACCEPTANCE', SK: ID, check_id: ID, schema_version: 1, status: 'OPEN', version: 0, expires_at: Math.floor(f.deps.now() / 1000) + 86400, test_sends: [], cases: {} });
   f.org.delivery_check = { ...f.delivery, status: 'FAIL' };
   f.ddb.set(f.org);
   return f;

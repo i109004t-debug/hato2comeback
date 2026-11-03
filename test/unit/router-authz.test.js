@@ -28,9 +28,9 @@ test('ルーターは選択したハンドラーだけを呼ぶ', async () => {
 });
 
 const expected = {
-  viewer: ['me.get', 'settings.get', 'topics.list', 'contacts.list', 'contacts.get', 'campaigns.list', 'campaigns.get', 'campaigns.stats', 'campaigns.failures'],
-  sender: ['me.get', 'settings.get', 'topics.list', 'contacts.list', 'contacts.get', 'contacts.create', 'contacts.update', 'contacts.unsubscribe', 'imports.create', 'imports.list', 'imports.get', 'campaigns.list', 'campaigns.create', 'campaigns.get', 'campaigns.update', 'campaigns.preview', 'campaigns.test-send', 'campaigns.submit', 'campaigns.start', 'campaigns.unschedule', 'campaigns.pause', 'campaigns.resume', 'campaigns.cancel', 'campaigns.stats', 'campaigns.failures'],
-  approver: ['me.get', 'settings.get', 'topics.list', 'contacts.list', 'contacts.get', 'campaigns.list', 'campaigns.get', 'campaigns.preview', 'campaigns.approve', 'campaigns.reject', 'campaigns.pause', 'campaigns.resume', 'campaigns.cancel', 'campaigns.stats', 'campaigns.failures'],
+  viewer: ['readiness.get', 'me.get', 'settings.get', 'topics.list', 'contacts.list', 'contacts.get', 'campaigns.list', 'campaigns.get', 'campaigns.stats', 'campaigns.failures'],
+  sender: ['readiness.get', 'contacts.events', 'imports.confirm', 'imports.discard', 'me.get', 'settings.get', 'topics.list', 'contacts.list', 'contacts.get', 'contacts.create', 'contacts.update', 'contacts.unsubscribe', 'imports.create', 'imports.list', 'imports.get', 'campaigns.list', 'campaigns.create', 'campaigns.get', 'campaigns.update', 'campaigns.preview', 'campaigns.test-send', 'campaigns.submit', 'campaigns.start', 'campaigns.unschedule', 'campaigns.pause', 'campaigns.resume', 'campaigns.cancel', 'campaigns.stats', 'campaigns.failures'],
+  approver: ['readiness.get', 'me.get', 'settings.get', 'topics.list', 'contacts.list', 'contacts.get', 'campaigns.list', 'campaigns.get', 'campaigns.preview', 'campaigns.approve', 'campaigns.reject', 'campaigns.pause', 'campaigns.resume', 'campaigns.cancel', 'campaigns.stats', 'campaigns.failures'],
 };
 
 for (const role of ['admin', 'sender', 'approver', 'viewer']) {

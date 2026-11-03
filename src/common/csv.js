@@ -53,17 +53,19 @@ export function parseCsv(input) {
   return rows;
 }
 
-export function validateCsvHeader(header) {
-  if (!Array.isArray(header) || new Set(header).size !== header.length || header.some((column) => !CSV_COLUMNS.includes(column)) || required.some((column) => !header.includes(column))) throw invalid('csv.header', 'COLUMNS');
+export function validateCsvHeader(header, mode = 'NEW_ONLY') {
+  const columns = mode === 'UPDATE_EXISTING' ? ['email', 'name', 'stop'] : CSV_COLUMNS;
+  const mandatory = mode === 'UPDATE_EXISTING' ? ['email'] : required;
+  if (!Array.isArray(header) || new Set(header).size !== header.length || header.some((column) => !columns.includes(column)) || mandatory.some((column) => !header.includes(column))) throw invalid('csv.header', 'COLUMNS');
   return header;
 }
 
-export function validateImportRequest(event) {
+export function validateImportRequest(event, mode = 'NEW_ONLY') {
   if (!/^text\/csv(?:\s*;\s*charset=utf-8)?$/i.test(header(event, 'content-type') ?? '')) throw invalid('content-type', 'CONTENT_TYPE');
   const idempotencyKey = header(event, 'idempotency-key');
   if (typeof idempotencyKey !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(idempotencyKey)) throw invalid('Idempotency-Key');
   const text = readBody(event);
-  validateCsvHeader(parseCsv(text)[0]);
+  validateCsvHeader(parseCsv(text)[0], mode);
   return { text, idempotencyKey };
 }
 
@@ -71,11 +73,11 @@ function validateTopics(topics) {
   if (!Array.isArray(topics) || !topics.length || topics.length > 20 || new Set(topics).size !== topics.length || topics.some((value) => !/^[a-z0-9_]{1,20}$/.test(value))) throw invalid('topics');
 }
 
-export function validateImportCsv(input, { topics, importId, now = Date.now } = {}) {
+export function validateImportCsv(input, { topics, importId, now = Date.now, mode = 'NEW_ONLY' } = {}) {
   validateTopics(topics);
   if (typeof importId !== 'string' || !importId) throw new TypeError('Import ID is required');
   const parsed = parseCsv(input);
-  const header = validateCsvHeader(parsed[0]);
+  const header = validateCsvHeader(parsed[0], mode);
   const rows = [];
   const rejected = [];
   const seen = new Set();
@@ -85,6 +87,16 @@ export function validateImportCsv(input, { topics, importId, now = Date.now } = 
     const source = Object.fromEntries(header.map((column, i) => [column, line[i]]));
     try {
       const address = normalizeEmail(source.email);
+      if (mode === 'UPDATE_EXISTING') {
+        const name = validateName(source.name ?? '');
+        const stop = source.stop ?? '';
+        const stopped = stop === 'ALL' ? [] : stop ? stop.split('|') : [];
+        if (new Set(stopped).size !== stopped.length || stopped.some((topic) => !topics.includes(topic)) || stop === 'ALL' && name) throw invalid('stop');
+        if (seen.has(address.email)) { rejected.push({ row: index + 1, code: 'INVALID', reason: 'DUPLICATE_IN_FILE' }); continue; }
+        seen.add(address.email);
+        rows.push({ row: index + 1, email: address.email, name, stop, stopped });
+        continue;
+      }
       const consent = validateConsent({ at: source.consent_at, source: source.consent_source, ...(source.consent_version ? { version: source.consent_version } : {}) }, { now });
       const name = validateName(source.name ?? '');
       const selected = source.topics.split(';');
@@ -100,7 +112,7 @@ export function validateImportCsv(input, { topics, importId, now = Date.now } = 
       rows.push({ row: index + 1, email: address.email, topics: selected, attributes });
     } catch (error) {
       if (!(error instanceof AppError)) throw error;
-      rejected.push({ row: index + 1, code: error.code });
+      rejected.push({ row: index + 1, code: mode === 'UPDATE_EXISTING' ? 'INVALID' : error.code, ...(mode === 'UPDATE_EXISTING' ? { reason: error.code } : {}) });
     }
   }
   return { rows, rejected };

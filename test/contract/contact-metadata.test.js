@@ -133,7 +133,8 @@ test('手動登録とCSVはSES登録開始前に復元可能な属性を保存�
     return createJob(input);
   };
   const received = await f.receive(f.importCsv('csv@example.com'));
-  assert.equal((await f.worker({ mode: 'import', import_id: received.json.import_id }, f.context)).status, 'IMPORTING');
+  assert.equal((await f.worker({ mode: 'import', import_id: received.json.import_id }, f.context)).status, 'PREVIEW');
+  assert.equal((await f.confirmImport(received.json.import_id)).status, 'IMPORTING');
 });
 
 test('CSVはSESから消えていても保存済みの停止metadataを上書きしない', async () => {
@@ -141,7 +142,8 @@ test('CSVはSESから消えていても保存済みの停止metadataを上書き
   const row = { PK: 'CONTACT_META', SK: hash('new@example.com'), version: 1, attributes: { consent }, blocked_all: true, blocked_topics: [] };
   f.ddb.set(row);
   const received = await f.receive(f.importCsv());
-  assert.equal((await f.worker({ mode: 'import', import_id: received.json.import_id }, f.context)).status, 'DONE');
+  assert.equal((await f.worker({ mode: 'import', import_id: received.json.import_id }, f.context)).status, 'PREVIEW');
+  assert.equal((await f.confirmImport(received.json.import_id)).status, 'DONE');
   assert.deepEqual(metadata(f, 'new@example.com'), row);
   assert.equal(f.jobs.size, 0);
 });

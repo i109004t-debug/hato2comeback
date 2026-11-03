@@ -6,6 +6,8 @@ import { addressHash } from '../../common/log.js';
 import { timestamp, updateRecord } from '../../common/records.js';
 import { contactAttributes, getContactMetadata, ensureContactMetadata, applyContactMetadata, eraseContactMetadata } from '../../common/contact-metadata.js';
 import { isErased, eraseMatch } from '../../common/erase.js';
+import { deliveryEvents } from '../../common/delivery-events.js';
+import { contactMetadataKey } from '../../common/contact-metadata.js';
 
 export const attributes = contactAttributes;
 
@@ -60,6 +62,12 @@ async function get({ runtime, user, body }) {
     if (item) suppression = { reason: item.Reason, last_update_time: item.LastUpdateTime };
   } catch (error) { if (error.name !== 'NotFoundException') throw error; }
   return { ...visible(contact, user), suppression };
+}
+
+async function events(ctx) {
+  const contact = await get(ctx);
+  const rid = await contactMetadataKey(ctx.runtime, ctx.body.email);
+  return { ...contact, events: await deliveryEvents(ctx.runtime, rid) };
 }
 
 async function create({ runtime, user, body, audit, requestId }) {
@@ -163,4 +171,4 @@ async function erase({ runtime, body, audit, requestId }) {
   } finally { await runtime.contactLock.change(owner, {}, true); }
 }
 
-export default { 'contacts.list': list, 'contacts.get': get, 'contacts.create': create, 'contacts.update': change, 'contacts.unsubscribe': change, 'contacts.reconsent': change, 'contacts.erase': erase };
+export default { 'contacts.list': list, 'contacts.get': get, 'contacts.events': events, 'contacts.create': create, 'contacts.update': change, 'contacts.unsubscribe': change, 'contacts.reconsent': change, 'contacts.erase': erase };

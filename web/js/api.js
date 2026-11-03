@@ -1,4 +1,8 @@
 export const ERROR_MESSAGES = Object.freeze({
+  SELF_CHANGE_FORBIDDEN: '自分自身のアカウントは変更できません。別の管理者に依頼してください。',
+  LAST_ADMIN: '有効な管理者が2人未満になる無効化・役割変更はできません。先に管理者を追加してください。',
+  REAUTH_REQUIRED: 'スタッフを変更するには、ログアウトしてからログインし直してください。',
+  CHECK_HASH_CHANGED: '検査を始めた後に送信設定かDNSが変わりました。新しい受入検査を始めてください。',
   OUTSIDE_APPROVED_WINDOW: '承認された送信期間の範囲外です。期間内の日時を指定してください。',
   AUDIENCE_EXCEEDS_APPROVAL: '宛先が承認の最大件数を超えたため、送らずに承認待ちへ戻りました。範囲を見直して承認してください。',
   CAPACITY_INSUFFICIENT: 'この配信は期限までに送り終えられません。管理者に1日の上限の引き上げを依頼するか、期限を延ばして承認し直してください。',
@@ -56,10 +60,10 @@ export function isUncertainMutation(error) {
 }
 
 export function apiPath(path, query = {}) {
-  if (!/^\/(?:me|settings(?:\/delivery-check)?|topics|contacts(?:\/(?:get|update|unsubscribe|reconsent|erase))?|imports(?:\/[0-9A-HJKMNP-TV-Z]{26})?|campaigns(?:\/[0-9A-HJKMNP-TV-Z]{26}(?:\/(?:preview|test-send|submit|approve|reject|start|unschedule|pause|resume|cancel|review|stats|failures|unknowns))?)?|audit)$/.test(path)) throw new ApiError('INVALID_REQUEST');
+  if (!/^\/(?:me|readiness|staff(?:\/[A-Za-z0-9_-]{1,128}\/(?:roles|disable|enable|reset-mfa|reset-password))?|settings(?:\/delivery-check(?:\/[0-9A-HJKMNP-TV-Z]{26}\/(?:cases\/T-\d{2}|evidence|submit))?)?|topics|contacts(?:\/(?:get|update|unsubscribe|reconsent|erase|events))?|imports(?:\/[0-9A-HJKMNP-TV-Z]{26}(?:\/(?:confirm|discard))?)?|campaigns(?:\/[0-9A-HJKMNP-TV-Z]{26}(?:\/(?:preview|test-send|submit|approve|reject|start|unschedule|pause|resume|cancel|review|stats|failures|unknowns))?)?|audit)$/.test(path)) throw new ApiError('INVALID_REQUEST');
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
-    if (!['limit', 'cursor', 'topic', 'status', 'month', 'send_by', 'send_after'].includes(key)) throw new ApiError('INVALID_REQUEST');
+    if (!['limit', 'cursor', 'topic', 'status', 'month', 'send_by', 'send_after', 'mode'].includes(key)) throw new ApiError('INVALID_REQUEST');
     if (value !== undefined && value !== null && value !== '') {
       const text = String(value);
       const valid = ['send_by', 'send_after'].includes(key) ? /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(text) : /^[A-Za-z0-9_-]+$/.test(text);
@@ -87,7 +91,15 @@ export function createApi({ auth, fetchFn = fetch, baseUrl = '/api/v1', onUnauth
     let response;
     try {
       response = await execute(await auth.accessToken());
-      if (response.status === 401) response = await execute(await auth.refresh());
+      if (response.status === 401) {
+        let rejection;
+        try { rejection = await response.json(); } catch { /* 不正な401は通常の更新失敗として扱う。 */ }
+        if (rejection?.error_code === 'REAUTH_REQUIRED') {
+          await auth.logout();
+          throw new ApiError('REAUTH_REQUIRED', 401);
+        }
+        response = await execute(await auth.refresh());
+      }
     } catch (error) {
       if (error?.message === 'UNAUTHENTICATED') { auth.clear(); onUnauthenticated(); throw new ApiError('UNAUTHENTICATED', 401); }
       throw error;

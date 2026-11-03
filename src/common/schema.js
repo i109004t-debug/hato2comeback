@@ -7,7 +7,7 @@ export function assertSupportedSchema(item) {
 }
 
 export function apiSchemaStore(store) {
-  const check = (PK, item) => ['CAMPAIGN', 'IMPORT'].includes(PK) ? assertSupportedSchema(item) : item;
+  const check = (PK, item) => ['CAMPAIGN', 'IMPORT', 'ACCEPTANCE'].includes(PK) ? assertSupportedSchema(item) : item;
   return {
     ...store,
     async get(PK, SK) { return check(PK, await store.get(PK, SK)); },

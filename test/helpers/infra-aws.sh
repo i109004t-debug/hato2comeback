@@ -91,6 +91,8 @@ mock_aws() {
         printf '%s\n' '{"ContactListName":"ht2","EmailAddress":"member@example.jp","TopicPreferences":[{"TopicName":"kaiho","SubscriptionStatus":"OPT_OUT"},{"TopicName":"event","SubscriptionStatus":"OPT_IN"}],"AttributesData":"{\"name\":\"会員\",\"consent\":{\"source\":\"入会\"}}"}'
       fi ;;
     'sesv2 update-contact') ;;
+    'cognito-idp admin-create-user') printf '%s\n' "${MOCK_STAFF_USERNAME:-staff-uuid}" ;;
+    'cognito-idp admin-add-user-to-group'|'cognito-idp admin-set-user-mfa-preference'|'cognito-idp admin-user-global-sign-out'|'cognito-idp admin-enable-user') [[ ${MOCK_STAFF_ERROR:-0} == 0 ]] || return 254 ;;
     *) printf 'Unexpected mock AWS call: %s\n' "$args" >&2; return 99 ;;
   esac
 }

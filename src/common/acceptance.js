@@ -1,5 +1,9 @@
-import { sendingConfigHash, DELIVERY_CASES } from './precheck.js';
+import { sendingConfigHash } from './precheck.js';
 import { monitoringAlarmNames, assertHealthy } from './monitoring.js';
+import { checkDns } from './dns-auth.js';
+import { AppError } from './http.js';
+import { updateRecord, timestamp, conflict } from './records.js';
+import { assertSupportedSchema } from './schema.js';
 
 export function currentConfigHash(runtime, org) {
   return sendingConfigHash({
@@ -16,13 +20,47 @@ export function assertIdentity(identity, domain) {
   assertHealthy(mail?.MailFromDomain === `bounce.${domain}` && mail.MailFromDomainStatus === 'SUCCESS' && mail.BehaviorOnMxFailure === 'REJECT_MESSAGE', 'AUTH_CHECK_FAILED');
 }
 
-export async function assertAcceptance(runtime, org, input) {
+export async function acceptanceHashes(runtime, org) {
+  const identity = await runtime.ses.getEmailIdentity({ EmailIdentity: runtime.senderDomain });
+  assertIdentity(identity, runtime.senderDomain);
+  const dns = await checkDns(runtime, identity);
+  assertHealthy(dns.status === 'PASS', 'AUTH_CHECK_FAILED');
+  return { config_hash: currentConfigHash(runtime, org), dns_config_hash: dns.dns_config_hash, dns_item_hashes: dns.dns_item_hashes };
+}
+
+export async function openCheck(runtime, id) {
+  const check = assertSupportedSchema(await runtime.store.get('ACCEPTANCE', id));
+  if (!check) throw new AppError('NOT_FOUND', 404, '受入検査がありません。');
+  if (check.status !== 'OPEN' || check.expires_at <= runtime.now() / 1000) throw new AppError('STATE_CONFLICT', 409, '受入検査の期限か状態を確認してください。');
+  return check;
+}
+
+export async function saveTestSends(runtime, id, results) {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const check = await openCheck(runtime, id);
+    try {
+      await updateRecord(runtime, 'ACCEPTANCE', id, check, { test_sends: [...check.test_sends, ...results.map((result) => ({ ...result, at: timestamp(runtime) }))] });
+      return;
+    } catch (error) { if (!conflict(error) || attempt === 4) throw error; }
+  }
+}
+
+export function deliveryStatus(runtime, record, maxAgeDays = 90) {
+  if (!record) return null;
+  const expires_at = new Date(Date.parse(record.passed_at) + maxAgeDays * 86400000).toISOString();
+  const remaining_days = Math.max(0, Math.ceil((Date.parse(expires_at) - runtime.now()) / 86400000));
+  return { ...record, expires_at, remaining_days, invalidation_reason: runtime.now() >= Date.parse(expires_at) ? 'EXPIRED' : record.invalidation_reason ?? null };
+}
+
+export async function notifyAcceptanceExpiry(runtime) {
+  const org = await runtime.store.get('SETTINGS', 'ORG');
+  const delivery = org?.delivery_check;
+  if (!delivery) return;
   const config = await runtime.config.get();
-  const auth = await runtime.store.get('SETTINGS', 'AUTH_STATUS');
-  const age = runtime.now() - Date.parse(auth?.checked_at);
-  assertHealthy(auth && auth.config_hash === currentConfigHash(runtime, org), auth ? 'AUTH_CHECK_STALE' : 'AUTH_CHECK_FAILED');
-  assertHealthy(auth.status === 'PASS' && auth.domain === runtime.senderDomain && age >= 0 && age <= config.auth_status_max_age_hours * 3600000, 'AUTH_CHECK_FAILED');
-  assertHealthy(input.config_hash === auth.config_hash && input.dns_config_hash === auth.dns_config_hash && DELIVERY_CASES.every((id) => input.cases[id] === 'PASS'), 'DELIVERY_CHECK_REQUIRED');
-  assertHealthy(/^delivery-checks\/[^/]+\/.+/.test(input.evidence_key) && !input.evidence_key.split('/').includes('..'), 'DELIVERY_CHECK_REQUIRED');
-  try { await runtime.s3.headObject({ Bucket: runtime.dataBucket, Key: input.evidence_key }); } catch { assertHealthy(false, 'DELIVERY_CHECK_REQUIRED'); }
+  const days = (Date.parse(delivery.passed_at) + config.delivery_check_max_age_days * 86400000 - runtime.now()) / 86400000;
+  const stage = days <= 0 ? 'EXPIRED' : [1, 7, 14, 30].find((value) => days <= value);
+  if (stage === undefined || delivery.expiry_notified?.includes(String(stage))) return;
+  // 先に通知済みを保存する。通知の結果不明時も同じ段階を自動で再通知しない。
+  await updateRecord(runtime, 'SETTINGS', 'ORG', org, { delivery_check: { ...delivery, expiry_notified: [...(delivery.expiry_notified ?? []), String(stage)] } });
+  await runtime.notify(stage === 'EXPIRED' ? 'DELIVERY_CHECK_EXPIRED' : 'DELIVERY_CHECK_EXPIRING', 'ORG');
 }

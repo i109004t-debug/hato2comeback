@@ -15,7 +15,7 @@ export async function createPkce(cryptoApi = globalThis.crypto) {
 }
 
 export function safeReturnTo(value) {
-  return typeof value === 'string' && /^#\/(?:send(?:\/[0-9A-HJKMNP-TV-Z]{26})?|contacts|history|settings)$/.test(value) ? value : '#/send';
+  return typeof value === 'string' && /^#\/(?:send(?:\/[0-9A-HJKMNP-TV-Z]{26})?|contacts|history|settings|staff)$/.test(value) ? value : '#/send';
 }
 
 export function validateConfig(input, origin) {

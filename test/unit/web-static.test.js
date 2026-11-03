@@ -89,3 +89,12 @@ test('web内の全ファイルはUTF-8・BOMなし・LF', () => {
     assert.doesNotMatch(bytes.toString('utf8'), /\r/, name);
   }
 });
+
+test('第11段階 スタッフ・配送記録・取込確認・受入案内を表示し、ハッシュの手入力を廃止する', () => {
+  for (const attr of ['data-staff-link', 'staff-template', 'data-staff-create', 'data-events-rows', 'data-import-confirm', 'data-import-discard', 'data-check-start', 'data-case-form', 'data-evidence-form', 'data-check-select']) assert.ok(html.includes(attr), attr);
+  assert.doesNotMatch(html, /name="(?:config_hash|dns_config_hash)"/);
+  assert.match(read('js/app.js'), /data-staff-link.*roles.includes\('admin'\)/);
+  assert.match(read('js/views/send.js'), /送信の準備状況/);
+  assert.match(read('js/views/send.js'), /AWS_ADMIN: 'AWSの管理者'/);
+  for (const text of ['配送の記録', '未配送', '24時間', '1MiB', 'スタッフ', '15分']) assert.ok(read('help.html').includes(text));
+});

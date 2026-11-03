@@ -7,7 +7,7 @@ export const AWS_APIS = Object.freeze({
   s3: { package: 's3', client: 'S3Client', operations: ['PutObject', 'GetObject', 'HeadObject', 'DeleteObject'] },
   sfn: { package: 'sfn', client: 'SFNClient', operations: ['StartExecution', 'DescribeExecution', 'SendTaskSuccess', 'SendTaskFailure'] },
   scheduler: { package: 'scheduler', client: 'SchedulerClient', operations: ['CreateSchedule', 'DeleteSchedule', 'GetSchedule'] },
-  cognito: { package: 'cognito-identity-provider', client: 'CognitoIdentityProviderClient', operations: ['AdminGetUser', 'AdminListGroupsForUser'] },
+  cognito: { package: 'cognito-identity-provider', client: 'CognitoIdentityProviderClient', operations: ['AdminGetUser', 'AdminListGroupsForUser', 'ListUsersInGroup', 'AdminCreateUser', 'AdminAddUserToGroup', 'AdminRemoveUserFromGroup', 'AdminDisableUser', 'AdminEnableUser', 'AdminUserGlobalSignOut', 'AdminSetUserMFAPreference', 'AdminResetUserPassword'] },
   cloudwatch: { package: 'cloudwatch', client: 'CloudWatchClient', operations: ['GetMetricData', 'DescribeAlarms'] },
   sns: { package: 'sns', client: 'SNSClient', operations: ['Publish'] },
   ssm: { package: 'ssm', client: 'SSMClient', operations: ['GetParameter'] },

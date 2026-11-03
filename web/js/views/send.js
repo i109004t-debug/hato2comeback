@@ -6,11 +6,12 @@ const canOperate = (user) => hasRole(user, 'admin', 'sender', 'approver');
 
 export const canSchedule = (campaign, user, blocked = false) => campaign.status === 'APPROVED' && canSend(user) && !blocked;
 
-export function testSendInput(user, recovery, note = '') {
+export function testSendInput(user, recovery, note = '', check_id) {
   if (!recovery) return {};
   if (!hasRole(user, 'admin')) throw new ApiError('FORBIDDEN', 403);
   if (!note.trim() || [...note].length > 1000 || /[\p{Cc}\p{Cs}\p{Zl}\p{Zp}]/u.test(note)) throw new ApiError('INVALID_REQUEST', 400, '', ['再検証の理由']);
-  return { purpose: 'ACCEPTANCE_RECOVERY', note: note.trim() };
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(check_id ?? '')) throw new ApiError('INVALID_REQUEST', 400, '', ['進行中の受入検査']);
+  return { purpose: 'ACCEPTANCE_RECOVERY', note: note.trim(), check_id };
 }
 
 export function primaryAction(campaign, user, { busy = false, dirty = false, stale = false, uncertain = false, previewHash = '', confirmed = false } = {}) {
@@ -109,6 +110,25 @@ export async function mount(ctx, id) {
   const root = clone('send-template');
   ctx.root.replaceChildren(root);
   const q = (selector) => root.querySelector(selector);
+  const readinessPanel = element('section', undefined, 'panel');
+  readinessPanel.append(element('h2', '送信の準備状況'));
+  const readinessItems = element('ul'); readinessPanel.append(readinessItems); root.prepend(readinessPanel);
+  async function readiness() {
+    try {
+      const response = await ctx.api.request('/readiness');
+      const owners = { SENDER: '配信担当', APPROVER: '承認者', ADMIN: '管理者', AWS_ADMIN: 'AWSの管理者' };
+      const statuses = { OK: '準備できています', WARN: '確認してください', BLOCKED: '止まっています', UNKNOWN: '取得できません' };
+      readinessItems.replaceChildren(...response.items.map((item) => element('li', `${item.title}：${statuses[item.status] ?? statuses.UNKNOWN}${item.detail ? `／${item.detail}` : ''}${item.status !== 'OK' ? `／${owners[item.owner] ?? '管理者'}：${item.action}` : ''}`)));
+    } catch { readinessItems.replaceChildren(element('li', '準備状況を取得できません。AWSの管理者がシステムの状態を確認してください。')); }
+  }
+  await readiness();
+  ctx.addCleanup(startPolling(readiness, { interval: 60000 }));
+  const checkSelect = element('select'); checkSelect.setAttribute('aria-label', '復旧テストの受入検査');
+  q('[data-recovery-note]').parentElement.append(checkSelect);
+  if (hasRole(ctx.user, 'admin')) {
+    const response = await ctx.api.request('/settings/delivery-check');
+    fillSelect(checkSelect, response.checks.map((item) => [item.check_id, `${formatTime(item.started_at)}に始めた検査`]), '設定画面で受入検査を始めてから選択');
+  }
   const form = q('[data-draft]');
   const gate = createActionGate();
   let campaign = { status: 'DRAFT', version: 0 };
@@ -118,6 +138,7 @@ export async function mount(ctx, id) {
   let uncertain = false;
   let renderedHash = '';
   let failureCursor;
+  let sesAcceptedCount;
   let failurePageCursor;
   let failuresLoading = false;
   let fixedLoading = false;
@@ -203,7 +224,7 @@ export async function mount(ctx, id) {
     q('[data-unknown-review]').hidden = !review;
     q('[data-unknown-admin]').hidden = review?.status !== 'OPEN' || !hasRole(ctx.user, 'admin');
     q('[data-unknown-submit]').disabled = blocked;
-    setText(root, '[data-unknown-status]', review ? `${review.status === 'OPEN' ? '調査中' : '調査終了'}：${formatCount(review.count)}件・開始 ${formatTime(review.opened_at)}` : '');
+    setText(root, '[data-unknown-status]', review ? `${review.status === 'OPEN' ? '調査中' : '調査終了'}：${formatCount(review.count)}件・開始 ${formatTime(review.opened_at)}／SES の受付を確認：${formatCount(sesAcceptedCount)}件。索引に見つからないことは未受付・未配送の証拠ではありません。` : '');
     q('[data-unknown-decisions]').replaceChildren(...(review?.decisions ?? []).map((d) => element('li', `${formatTime(d.at)}・${d.by}・${d.decision === 'NO_RESEND' ? '送り直さず終了' : '継続'}・SES受付確認 ${formatCount(d.ses_accepted_count)}件・${d.note}`)));
     footer();
   }
@@ -247,6 +268,8 @@ export async function mount(ctx, id) {
     q('[data-failures-next]').disabled = true;
     try {
       const page = await ctx.api.request(`/campaigns/${campaign.campaign_id}/failures`, { query: { limit: 50, cursor } });
+      sesAcceptedCount = page.ses_accepted_count;
+      render();
       tableRows(q('[data-failures]'), page.items.map((item) => [hasRole(ctx.user, 'admin') ? item.email ?? item.m : item.m, resultLabel(item.r), item.c, formatTime(item.t)]));
       failureCursor = page.cursor;
       failurePageCursor = cursor;
@@ -352,7 +375,7 @@ export async function mount(ctx, id) {
   on(root, '[data-test]', 'click', () => {
     if (q('[data-test]').disabled) return;
     perform(async () => {
-      const body = testSendInput(ctx.user, q('[data-recovery]').checked, q('[data-recovery-note]').value);
+      const body = testSendInput(ctx.user, q('[data-recovery]').checked, q('[data-recovery-note]').value, checkSelect.value);
       if (body.purpose && !await confirmDialog('受入確認の再検証として、設定のテスト送信先だけに送ります。理由を監査記録に残します。')) return;
       const result = await ctx.api.request(`/campaigns/${campaign.campaign_id}/test-send`, { method: 'POST', body });
       const labels = { UNKNOWN: '不明（送り直しません）' };
