@@ -76,7 +76,7 @@ async function get(ctx) {
   value.deadline_at = campaignDeadline(campaign, config);
   const estimate = await ctx.runtime.store.get('SETTINGS', 'TOPIC_COUNTS');
   if (campaign.status === 'DRAFT') { value.audience_estimate = estimate?.counts?.[campaign.topic] ?? null; value.audience_estimate_at = estimate?.counted_at ?? null; }
-  if (campaign.status === 'NEEDS_REVIEW' && ctx.user.roles.includes('admin') && campaign.review && campaign.review.phase !== 'prepare' && Number.isSafeInteger(campaign.chunks_total)) {
+  if (campaign.status === 'NEEDS_REVIEW' && ctx.user.roles.includes('admin') && campaign.review && campaign.review.reason !== 'RESTORED' && campaign.review.phase !== 'prepare' && Number.isSafeInteger(campaign.chunks_total)) {
     const rows = campaign.review.chunk === campaign.chunks_total ? [] : await readChunk(ctx.runtime, campaign, campaign.review.chunk);
     value.review_recipients = rows.slice(campaign.review.index_from, campaign.review.index_to + 1).map((row) => row.e);
     const day = (time) => new Date(time).toISOString().slice(0, 10).replaceAll('-', '/');
@@ -346,6 +346,7 @@ async function review(ctx) {
   const { runtime, body } = ctx;
   let campaign = await load(ctx);
   assertStatus(campaign, ['NEEDS_REVIEW']);
+  if (campaign.review?.reason === 'RESTORED' && body.decision !== 'CANCEL') throw new AppError('STATE_CONFLICT', 409, '復元した配信は中止だけを選べます。新しい配信として作り直してください。');
   if (body.decision === 'CANCEL') return cancel({ ...ctx, body: { reason: body.note } });
   const preparing = campaign.review?.phase === 'prepare' || !Number.isSafeInteger(campaign.chunks_total);
   let progress;
@@ -496,7 +497,7 @@ async function unknowns(ctx) {
   const unknown_review = { ...campaign.unknown_review, status: body.decision === 'NO_RESEND' ? 'RESOLVED' : 'OPEN', decisions: [...(campaign.unknown_review.decisions ?? []), decision] };
   const saved = await updateCampaign(runtime, campaign, [campaign.status], { unknown_review });
   await ctx.audit('UNKNOWN_DECISION', campaign.campaign_id, decision);
-  if (unknown_review.status === 'RESOLVED') await deleteSnapshot(runtime, campaign);
+  if (unknown_review.status === 'RESOLVED') await deleteSnapshot(runtime, saved);
   return clean(saved);
 }
 

@@ -14,12 +14,12 @@ const DAY = 86400000;
 const code = (response, status, error) => { assert.equal(response.statusCode, status, response.body); assert.equal(response.json.error_code, error, response.body); };
 const rid = (f, email = f.addresses[0]) => addressHash(email, '7'.repeat(64));
 const thirdAdmin = (f) => f.staff.set('third-admin', { ...structuredClone(f.staff.get('other-admin')), Username: 'third-admin', Attributes: [{ Name: 'sub', Value: 'third-sub' }] });
-const eventFor = (f, type = 'Send', changes = {}) => ({ source: 'aws.ses', id: 'abcd1234-1234-4567-8910-abcdefghijkl', time: new Date(f.deps.now()).toISOString(), detail: { eventType: type, mail: { timestamp: new Date(f.deps.now()).toISOString(), destination: ['private@example.com'], tags: { rid: [rid(f)], campaign: [ID] } }, [type[0].toLowerCase() + type.slice(1)]: { timestamp: new Date(f.deps.now()).toISOString() } }, ...changes });
+const eventFor = (f, type = 'Send', changes = {}) => ({ source: 'aws.ses', id: 'abcd1234-1234-4567-8910-abcdefghijkl', time: new Date(f.deps.now()).toISOString(), detail: { eventType: type, mail: { timestamp: new Date(f.deps.now()).toISOString(), destination: ['private@example.com'], tags: { rid: [rid(f)], campaign: [ID] } }, [type === 'Rendering Failure' ? 'failure' : type[0].toLowerCase() + type.slice(1)]: { timestamp: new Date(f.deps.now()).toISOString() } }, ...changes });
 
 test('T-63 8.5 配送記録の8種類はアドレスを持たず、同じイベントを重複保存しない', async () => {
   const f = managementFixture({ count: 1 });
   const handler = eventsHandler({ ...f.deps, store: f.store });
-  for (const type of ['Send', 'Delivery', 'Bounce', 'Complaint', 'DeliveryDelay', 'Reject', 'Subscription', 'RenderingFailure']) {
+  for (const type of ['Send', 'Delivery', 'Bounce', 'Complaint', 'DeliveryDelay', 'Reject', 'Subscription', 'Rendering Failure']) {
     const event = eventFor(f, type);
     if (type === 'Bounce') event.detail.bounce = { bounceType: 'Permanent', bouncedRecipients: [{ emailAddress: 'private@example.com', diagnosticCode: `550 private@example.com ${'x'.repeat(350)}` }] };
     if (type === 'Subscription') event.detail.subscription.newTopicPreferences = { unsubscribeAll: true, topicSubscriptionStatus: [{ topicName: 'news', subscriptionStatus: 'OPT_OUT', email: 'private@example.com' }] };
@@ -42,7 +42,7 @@ test('T-63 rid欠落・不正値・種類不明・期限外は捨て、保存失
     (e) => { e.detail.mail.tags.rid.push('a'.repeat(64)); }, (e) => { e.detail.eventType = 'Open'; },
     (e) => { e.source = 'other'; }, (e) => { e.detail.send.timestamp = new Date(f.deps.now() - 181 * DAY).toISOString(); },
   ]) { const event = eventFor(f); modify(event); assert.equal(eventRecord(event, f.deps.now()), null); }
-  const handler = eventsHandler({ now: f.deps.now, store: { put: async () => { throw failure('AccessDeniedException'); } } });
+  const handler = eventsHandler({ env: 'stg', now: f.deps.now, store: { put: async () => { throw failure('AccessDeniedException'); } } });
   await assert.rejects(handler(eventFor(f)), { name: 'AccessDeniedException' });
 });
 

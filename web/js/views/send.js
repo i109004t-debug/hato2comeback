@@ -93,6 +93,10 @@ export function draftFooter(settings, display) {
 
 export function reviewInput(campaign, decision, note) {
   if (!note.trim() || [...note].length > 1000 || !['SKIP', 'RESEND', 'CANCEL', 'RESTART'].includes(decision)) throw new ApiError('INVALID_REQUEST', 400, '', ['確認した内容・判断の理由']);
+  if (campaign.review?.reason === 'RESTORED') {
+    if (decision !== 'CANCEL') throw new ApiError('STATE_CONFLICT', 409);
+    return { decision, note };
+  }
   const preparing = campaign.review?.phase === 'prepare' || !Number.isSafeInteger(campaign.chunks_total);
   if (preparing) {
     if (!['RESTART', 'CANCEL'].includes(decision)) throw new ApiError('INVALID_REQUEST');
@@ -247,6 +251,14 @@ export async function mount(ctx, id) {
 
   function reviewDetails() {
     if (campaign.status !== 'NEEDS_REVIEW' || !hasRole(ctx.user, 'admin')) return;
+    if (campaign.review?.reason === 'RESTORED') {
+      fillSelect(q('[data-decision]'), [['CANCEL', '中止']]);
+      setText(root, '[data-review-range]', '復元の点検で要確認になった配信です。中止だけを選べます。送り直す場合は新しい配信として作り直してください。二重に届く可能性があります。');
+      setText(root, '[data-review-recipients]', '復元した進捗からは再開できません。');
+      setText(root, '[data-query]', campaign.athena_query ?? '配送の記録を確認してください。');
+      reviewRisk();
+      return;
+    }
     const preparing = campaign.review?.phase === 'prepare' || !Number.isSafeInteger(campaign.chunks_total);
     const old = q('[data-decision]').value;
     fillSelect(q('[data-decision]'), preparing ? [['CANCEL', '中止'], ['RESTART', '最初からやり直す']] : [['CANCEL', '中止'], ['SKIP', '飛ばして再開'], ['RESEND', '送り直して再開']]);

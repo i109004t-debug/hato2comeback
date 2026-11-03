@@ -22,10 +22,10 @@ test('12.6 AWSアダプターはSDKを遅延読込し、許可するAPIだけを
   assert.equal(loaded.length, 0);
   const expectedMethods = {
     kms: 'generateMac describeKey',
-    ses: 'getAccount getEmailIdentity getConfigurationSet getConfigurationSetEventDestinations getContactList listContacts getContact createContact updateContact deleteContact getSuppressedDestination createImportJob getImportJob createEmailTemplate getEmailTemplate testRenderEmailTemplate deleteEmailTemplate sendEmail',
-    ddb: 'getItem putItem updateItem deleteItem query transactWriteItems batchGetItem',
-    s3: 'putObject getObject headObject deleteObject',
-    sfn: 'startExecution describeExecution sendTaskSuccess sendTaskFailure',
+    ses: 'getAccount getEmailIdentity getConfigurationSet getConfigurationSetEventDestinations getContactList listContacts getContact createContact updateContact deleteContact getSuppressedDestination deleteSuppressedDestination createImportJob getImportJob createEmailTemplate getEmailTemplate testRenderEmailTemplate deleteEmailTemplate sendEmail',
+    ddb: 'getItem putItem updateItem deleteItem query scan transactWriteItems batchGetItem',
+    s3: 'putObject getObject headObject deleteObject listObjectsV2',
+    sfn: 'startExecution describeExecution listExecutions sendTaskSuccess sendTaskFailure',
     scheduler: 'createSchedule deleteSchedule getSchedule',
     cognito: 'adminGetUser adminListGroupsForUser listUsersInGroup adminCreateUser adminAddUserToGroup adminRemoveUserFromGroup adminDisableUser adminEnableUser adminUserGlobalSignOut adminSetUserMFAPreference adminResetUserPassword',
     cloudwatch: 'getMetricData describeAlarms',
@@ -49,7 +49,7 @@ test('12.6 AWSアダプターはSDKを遅延読込し、許可するAPIだけを
   assert.ok(sent.filter(({ name }) => name === 'sesv2').every(({ options }) => options.abortSignal.timeout === 10000));
   assert.equal(adapters.ses.sendBulkEmail, undefined);
   assert.equal(adapters.ses.updateEmailTemplate, undefined);
-  assert.equal(adapters.ses.deleteSuppressedDestination, undefined);
+  assert.equal(adapters.ses.deleteSuppressedDestination instanceof Function, true);
   assert.equal(adapters.s3.headObject instanceof Function, true);
   assert.equal(adapters.sns.publish instanceof Function, true);
 });

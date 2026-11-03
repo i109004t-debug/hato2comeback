@@ -88,7 +88,7 @@ export function createHandler(deps = {}) {
       if (topicOperations.has(route.operation)) topicDefinitions = (await services.ses.getContactList({ ContactListName: services.contactList })).Topics ?? [];
       const topics = topicDefinitions.map((item) => item.TopicName);
       if (topicOperations.has(route.operation)) body = validateRoute(route.operation, input, { now: services.now, senderDomain: services.senderDomain, topics });
-      if (route.operation === 'staff.change' && (params.action === 'roles' ? !body.roles : Object.keys(body).length)) throw new AppError('INVALID_REQUEST', 400, '入力形式を確認してください。');
+      if (route.operation === 'staff.change' && (params.action === 'roles' ? !body.roles : Object.keys(body).some((key) => key !== 'confirm_single_admin' || params.action !== 'disable'))) throw new AppError('INVALID_REQUEST', 400, '入力形式を確認してください。');
       const value = await routes[route.operation]({ runtime: services, event, context, route, params, query, body, user, claims, audit, requestId, topics, topicDefinitions });
       if (!['GET'].includes(route.method) && !['contacts.get', 'campaigns.preview', 'campaigns.submit', 'campaigns.approve', 'campaigns.unknowns'].includes(route.operation)) await audit(route.operation.toUpperCase().replaceAll('.', '_'), params.id ?? params.importId ?? route.operation.split('.')[0]);
       return jsonResponse(value?.statusCode ?? 200, value?.data ?? value);

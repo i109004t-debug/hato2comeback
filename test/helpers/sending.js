@@ -160,6 +160,7 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
       describeKey: async () => ({ KeyMetadata: { KeyState: 'Enabled' } }),
     },
     s3: {
+      listObjectsV2: async ({ Prefix }) => ({ Contents: [...files.keys()].filter((Key) => Key.startsWith(Prefix)).map((Key) => ({ Key })), IsTruncated: false }),
       deleteObject: async (input) => { files.delete(input.Key); return {}; },
       putObject: async (input) => { await f.onPut?.(input); files.set(input.Key, input.Body); return {}; },
       getObject: async (input) => { if (!files.has(input.Key)) throw failure('NoSuchKey', 404); return { Body: files.get(input.Key) }; },

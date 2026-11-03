@@ -49,7 +49,7 @@
       <p>受入記録は90日間有効です。残り日数と失効の理由は設定画面に表示します。期限の30・14・7・1日前と期限切れを管理者へ通知します。</p>
 
       <h2>スタッフを管理する（管理者）</h2>
-      <p>「スタッフ」で追加、役割変更、有効化・無効化、認証アプリの初期化、パスワードの再設定ができます。追加した人は案内メールの仮パスワードでログインし、パスワード変更と認証アプリの登録を行います。管理者は2人以上にしてください。自分自身の変更は別の管理者に依頼します。有効な管理者が2人未満になる無効化・役割変更はできません。初期状態で1人の場合は、先に管理者を追加してください。</p>
+      <p>「スタッフ」で追加、役割変更、有効化・無効化、認証アプリの初期化、パスワードの再設定ができます。追加した人は案内メールの仮パスワードでログインし、パスワード変更と認証アプリの登録を行います。管理者は2人以上を推奨します。自分自身の変更は別の管理者に依頼します。有効な管理者を0人にはできません。1人になる変更では警告と確認が出ます。内容を確認して確定してください。</p>
       <p>変更にはログインから15分以内の認証が必要です。時間が過ぎるとログアウトしますので、ログインし直してください。管理者がログインできない場合はAWSの管理者に復旧を依頼します。</p>
 
       <h2>結果を読む・止める</h2>
@@ -63,6 +63,10 @@
       <p>間違いに気づいたら「一時停止」を押し、管理者に連絡してください。「中止」した配信は再開できません。SESがすでに受け付けたメールは取り消せません。「要確認」や「不明」の宛先には、自分の判断で送り直さないでください。</p>
 
       <h2>操作できないとき</h2>
+      <p>理由がRESTOREDの要確認は中止だけを選べます。復元した進捗から再開しません。送り直す場合は新しい配信として作り直してください。二重に届く可能性があります。</p>
+      <p>完全削除では、SESの連絡先、画面の名前・同意、配送記録の索引を削除します。抑止リストは非同期で数分以内に削除します。失敗の通知ERASE_SUPPRESSION_FAILEDがあれば、AWS管理者が削除します。再登録を防ぐ照合値と停止の印は残ります。</p>
+      <p>取込ファイルは最長7日、宛先スナップショットは配信終了時（結果不明の調査がOPENなら調査終了時）または最長30日、バックアップと生の配送記録は最長90日で消えます。期間は組織の設定で短くなることがあります。</p>
+      <p>スタッフ変更の結果が不明なときは同じ操作を繰り返さず、一覧で結果を確かめてください。変更ロックは5分で失効し、その後に変更できます。</p>
       <ul>
         <li>ボタンが押せない：そばの説明を読んでください。権限がない、下書きを保存していない、配信の状態が合わない、などが理由です。</li>
         <li>「他の人が先に操作しました」：入力した内容を控えてから、「読み込み直す」を押します。</li>
@@ -80,6 +84,57 @@
         <li>「結果不明の調査」（UNKNOWN_REVIEW_OPEN）：管理者が結果の宛先と配送の記録を調べ、根拠を書いて「調査を継続」または「送り直さず調査を終了」を記録します。OPENのまま3日を過ぎると通知し、その後は7日に1回まで通知します。元のアドレスは保存中の30日間だけ管理者に表示できます。調査を終了すると宛先の保存を消します。自動で再送はしません。</li>
       </ul>
       <p>問い合わせるときは、日時、環境、配信IDまたは取込ID、押したボタン、画面の説明、問い合わせ番号を伝えてください。パスワード、認証コード、会員名簿、配信停止のURLは、ふだんの連絡に含めないでください。</p>
+      <h2>エラーコードと対応</h2>
+      <table><thead><tr><th>コード</th><th>対応</th></tr></thead><tbody data-error-help>
+          <tr><td><code>INVALID_REQUEST</code></td><td>入力の形式を確認してください。</td></tr>
+          <tr><td><code>UNAUTHENTICATED</code></td><td>ログインの有効期限が切れました。再ログインしてください。</td></tr>
+          <tr><td><code>REAUTH_REQUIRED</code></td><td>スタッフを変更するには、ログアウトしてからログインし直してください。</td></tr>
+          <tr><td><code>FORBIDDEN</code></td><td>この操作の権限がありません。管理者に確認してください。</td></tr>
+          <tr><td><code>FORBIDDEN_ORIGIN</code></td><td>運営画面のURLから開き直してください。</td></tr>
+          <tr><td><code>USER_DISABLED</code></td><td>アカウントが無効です。管理者に確認してください。</td></tr>
+          <tr><td><code>NO_ROLE</code></td><td>役割が設定されていません。管理者に確認してください。</td></tr>
+          <tr><td><code>NOT_FOUND</code></td><td>対象の記録が見つかりません。</td></tr>
+          <tr><td><code>STATE_CONFLICT</code></td><td>他の人が先に操作しました。画面を読み込み直してください。</td></tr>
+          <tr><td><code>VERSION_CONFLICT</code></td><td>他の人が先に操作しました。画面を読み込み直してください。</td></tr>
+          <tr><td><code>HASH_MISMATCH</code></td><td>承認画面を開いた後に内容が変わりました。画面を読み込み直し、内容を確かめてから承認してください。</td></tr>
+          <tr><td><code>CONTACT_EXISTS</code></td><td>この宛先は登録済みです。既存の購読状態は変わりません。</td></tr>
+          <tr><td><code>ERASED_ADDRESS</code></td><td>完全削除した宛先は登録できません。</td></tr>
+          <tr><td><code>RECONSENT_REQUIRED</code></td><td>購読の再開には、管理者による新しい同意の証跡の登録が必要です。</td></tr>
+          <tr><td><code>ALREADY_STARTED</code></td><td>配信はすでに始まっています。配信状況を確認してください。</td></tr>
+          <tr><td><code>SENDING_IN_PROGRESS</code></td><td>他の配信が送信中です。終わるまでお待ちください。</td></tr>
+          <tr><td><code>CONTACT_IMPORT_IN_PROGRESS</code></td><td>宛先の登録・取込を処理中です。終わるまでお待ちください。</td></tr>
+          <tr><td><code>UNSUPPORTED_SCHEMA</code></td><td>この記録の形式に対応していません。AWSの管理者が実行環境とコードの版を確認してください。</td></tr>
+          <tr><td><code>SELF_CHANGE_FORBIDDEN</code></td><td>自分自身のアカウントは変更できません。別の管理者に依頼してください。</td></tr>
+          <tr><td><code>LAST_ADMIN</code></td><td>有効な管理者を0人にはできません。1人になる変更は警告の確認が必要です。一覧を読み直して確認してください。</td></tr>
+          <tr><td><code>CHECK_HASH_CHANGED</code></td><td>検査を始めた後に送信設定かDNSが変わりました。新しい受入検査を始めてください。</td></tr>
+          <tr><td><code>PAYLOAD_TOO_LARGE</code></td><td>本文は50KiB以下、CSVは2MiB以下にしてください。</td></tr>
+          <tr><td><code>SETTINGS_INCOMPLETE</code></td><td>法定表示などの組織設定が足りません。管理者が設定してください。</td></tr>
+          <tr><td><code>INVALID_ADDRESS</code></td><td>メールアドレスの形式を確認してください。</td></tr>
+          <tr><td><code>NONSTANDARD_ADDRESS</code></td><td>この形式のメールアドレスは登録できません。会員に別のアドレスを確認してください。</td></tr>
+          <tr><td><code>QUOTA_INSUFFICIENT</code></td><td>SESの24時間の送信枠が足りません。枠が戻るのをお待ちください。いつも足りなければAWSの管理者に引上げを依頼してください。</td></tr>
+          <tr><td><code>TEST_RECIPIENT_NOT_REGISTERED</code></td><td>テスト送信先の登録と、配信リストの購読を確認してください。</td></tr>
+          <tr><td><code>RECIPIENT_NOT_ALLOWED_IN_ENV</code></td><td>この環境で許可されたテスト用の宛先を使ってください。</td></tr>
+          <tr><td><code>DELIVERY_CHECK_REQUIRED</code></td><td>受信確認の記録がない、または期限切れ・設定変更で無効です。管理者が受信確認をやり直してください。</td></tr>
+          <tr><td><code>IMPORT_REQUIRES_PRODUCTION</code></td><td>SESのサンドボックスではCSV取込を使えません。1件ずつ登録してください。</td></tr>
+          <tr><td><code>CONSENT_SOURCE_HAS_ADDRESS</code></td><td>同意の取得経路にはメールアドレスを含めず、申込方法などを記入してください。</td></tr>
+          <tr><td><code>OUTSIDE_APPROVED_WINDOW</code></td><td>承認された送信期間の範囲外です。期間内の日時を指定してください。</td></tr>
+          <tr><td><code>CAPACITY_INSUFFICIENT</code></td><td>この配信は期限までに送り終えられません。管理者に1日の上限の引き上げを依頼するか、期限を延ばして承認し直してください。</td></tr>
+          <tr><td><code>AUDIENCE_EXCEEDS_APPROVAL</code></td><td>宛先が承認の最大件数を超えたため、送らずに承認待ちへ戻りました。範囲を見直して承認してください。</td></tr>
+          <tr><td><code>TOO_MANY_RECIPIENTS</code></td><td>宛先がシステムの配信上限を超えています。管理者に確認してください。</td></tr>
+          <tr><td><code>SES_BUSY</code></td><td>SESが混み合っています。しばらく待って、配信状況を確認してください。</td></tr>
+          <tr><td><code>SES_PAUSED</code></td><td>SESが送信を止めています。AWSの管理者が理由を確認してください。</td></tr>
+          <tr><td><code>SENDING_DISABLED</code></td><td>全体の停止スイッチが入っています。AWSの管理者が理由を確認してください。</td></tr>
+          <tr><td><code>REPUTATION_ALARM</code></td><td>バウンス率や苦情率の警報が出ています。原因を直し、警報が解除されるまでお待ちください。</td></tr>
+          <tr><td><code>AUTH_CHECK_FAILED</code></td><td>送信元ドメインの認証に異常があります。AWSの管理者がDNSとSESの状態を確認してください。</td></tr>
+          <tr><td><code>AUTH_CHECK_STALE</code></td><td>設定を変更したため、送信元の確認をやり直しています。数分後にもう一度お試しください。</td></tr>
+          <tr><td><code>EVENT_DESTINATION_DISABLED</code></td><td>配送の記録が無効です。AWSの管理者が復旧してください。</td></tr>
+          <tr><td><code>EVENT_LOG_STALE</code></td><td>配送の記録が遅れています。AWSの管理者が復旧してください。</td></tr>
+          <tr><td><code>MONITORING_UNAVAILABLE</code></td><td>配送の記録や監視の状態を確認できません。AWSの管理者が復旧してください。</td></tr>
+          <tr><td><code>SUPPRESSION_MISCONFIGURED</code></td><td>配送しない宛先の管理設定に異常があります。AWSの管理者が復旧してください。</td></tr>
+          <tr><td><code>CONFIGURATION_INVALID</code></td><td>システムの設定を確認できません。AWSの管理者が復旧してください。</td></tr>
+          <tr><td><code>ERASE_CHECK_UNAVAILABLE</code></td><td>完全削除の記録を確認できません。AWSの管理者が鍵の状態を確認してください。</td></tr>
+          <tr><td><code>INTERNAL</code></td><td>処理を完了できませんでした。問い合わせ番号を管理者にお知らせください。</td></tr>
+      </tbody></table>
       <p><a href="./index.html">運営画面へ戻る</a></p>
     </section>
   </main>

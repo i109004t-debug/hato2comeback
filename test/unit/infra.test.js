@@ -32,7 +32,7 @@ test('第11段階 8.5 SESの3発行先と既定バスのルール、呼出し元
 });
 
 test('第11段階 12.6 EventsFunctionのロールは同じテーブルのADDR#*へのPutItemだけ', () => {
-  assert.deepEqual([...allowed(resources.EventsRole)], ['dynamodb:PutItem']);
+  assert.deepEqual([...allowed(resources.EventsRole)].sort(), ['logs:CreateLogStream', 'logs:PutLogEvents', 'dynamodb:PutItem'].sort());
   assert.match(resources.EventsRole, /Resource: !GetAtt Table.Arn/);
   assert.match(resources.EventsRole, /'ForAllValues:StringLike': \{'dynamodb:LeadingKeys': \['ADDR#\*'\]\}/);
   assert.doesNotMatch(resources.EventsRole, /ManagedPolicyArns|Resource: '\*'|ses:|secretsmanager:|sns:|s3:|dynamodb:(?:GetItem|UpdateItem|Query|DeleteItem)/);
@@ -50,7 +50,7 @@ test('第11段階 12.6 Cognito追加権限はユーザープールだけ、証�
   assert.match(put, /Resource: \[!Sub '\$\{DataBucket.Arn\}\/imports\/staging\/\*', !Sub '\$\{DataBucket.Arn\}\/delivery-checks\/\*'\]/);
   const deletion = resources.ApiPolicy.split(/\n          - /).find((part) => part.includes("Action: ['s3:DeleteObject']"));
   assert.match(deletion, /Resource: \[!Sub '\$\{DataBucket.Arn\}\/recipients\/\*', !Sub '\$\{DataBucket.Arn\}\/imports\/staging\/\*'\]/);
-  assert.match(resources.DataBucket, /Prefix: imports\/preview\/, ExpirationInDays: 7/);
+  assert.match(resources.DataBucket, /Prefix: imports\/preview\/, ExpirationInDays: !Ref ImportRetentionDays/);
 });
 
 test('第9段階 4.6 監査保管庫はObject Lock・保持・暗号化・公開ブロック・TLSを持つ', () => {
@@ -74,7 +74,7 @@ test('第9段階 4.6 AuditFunctionは同環境のストリーム読取・2つの
   assert.doesNotMatch(resources.AuditRole, /ses:|dynamodb:(?:GetItem|PutItem|UpdateItem|DeleteItem|Query|Scan)|s3:(?:DeleteObject|GetObject|BypassGovernanceRetention)/);
   assert.match(resources.WorkerPolicy, /Action: \['s3:ListBucket'\]\n\s+Resource: !GetAtt AuditArchiveBucket.Arn/);
   assert.match(resources.WorkerPolicy, /Action: \['s3:GetObject'\]\n\s+Resource: !Sub '\$\{AuditArchiveBucket.Arn\}\/\*'/);
-  assert.doesNotMatch(resources.ApiPolicy, /AuditArchiveBucket/);
+  assert.ok(resources.ApiPolicy.split(/\n          - /).filter((part) => part.includes('AuditArchiveBucket')).every((part) => part.includes('Effect: Deny')));
 });
 
 test('第9段階 4.6 監査Streamsの絞込と無期限再試行・二分割、3つのアラームを定義する', () => {
@@ -101,8 +101,12 @@ test('第9段階 4.7 AddressHmacSecretと独立したKMS HMAC鍵、最小権限�
   for (const requirement of ['KeySpec: HMAC_256', 'KeyUsage: GENERATE_VERIFY_MAC', 'PendingWindowInDays: 30', 'DeletionPolicy: Retain\n    UpdateReplacePolicy: Retain', "Action: 'kms:*'", 'iam::${AWS::AccountId}:root']) assert.ok(resources.EraseMacKey.includes(requirement));
   assert.match(resources.ApiPolicy, /Action: \['kms:GenerateMac'\]\n\s+Resource: !GetAtt EraseMacKey.Arn/);
   assert.match(resources.WorkerPolicy, /Action: \['kms:GenerateMac', 'kms:DescribeKey'\]\n\s+Resource: !GetAtt EraseMacKey.Arn/);
-  assert.doesNotMatch(resources.ApiPolicy + resources.WorkerPolicy, /kms:(?:Sign|Decrypt|ScheduleKeyDeletion|DisableKey)|BypassGovernanceRetention/);
-  assert.match(resources.WorkerPolicy, /Action: \['dynamodb:DeleteItem'\][\s\S]*?dynamodb:LeadingKeys': \[CONTACT_META\]/);
+  assert.doesNotMatch(resources.ApiPolicy + resources.WorkerPolicy, /kms:(?:Sign|Decrypt|ScheduleKeyDeletion|DisableKey)/);
+  for (const policy of [resources.ApiPolicy, resources.WorkerPolicy]) {
+    assert.equal(allowed(policy).has('s3:BypassGovernanceRetention'), false);
+    assert.match(policy, /Sid: DenyAuditArchiveMutation\n\s+Effect: Deny/);
+  }
+  assert.match(resources.WorkerPolicy, /Action: \['dynamodb:DeleteItem'\][\s\S]*?dynamodb:LeadingKeys': \[CONTACT_META, 'ADDR#\*'\]/);
   assert.doesNotMatch(main, /EraseSecret|erase-hmac|ERASE_SECRET_ARN/);
 });
 
@@ -170,8 +174,8 @@ test('4.3〜4.5 PITR、TTL、削除保護、暗号化、公開ブロック、全
     assert.match(resources[`${name}Policy`], /aws:SecureTransport/);
   }
   assert.match(resources.WebBucket, /VersioningConfiguration: \{Status: Enabled\}/);
-  for (const [prefix, days] of Object.entries({'imports/staging/':7,'imports/ready/':365,'imports/report/':365,'recipients/':30,'results/':180,'backups/contacts/':365,'delivery-checks/':180})) assert.ok(resources.DataBucket.includes(`Prefix: ${prefix}, ExpirationInDays: ${days}`), prefix);
-  assert.match(resources.EventLogBucket, /Prefix: ses-events\/, ExpirationInDays: 180/);
+  for (const [prefix, days] of Object.entries({'imports/staging/':'!Ref ImportRetentionDays','imports/ready/':'!Ref ImportRetentionDays','imports/report/':365,'recipients/':'!Ref SnapshotRetentionDays','results/':180,'backups/contacts/':'!Ref BackupRetentionDays','delivery-checks/':180,'restore-reports/':365})) assert.ok(resources.DataBucket.includes(`Prefix: ${prefix}, ExpirationInDays: ${days}`), prefix);
+  assert.match(resources.EventLogBucket, /Prefix: ses-events\/, ExpirationInDays: !Ref EventLogRetentionDays/);
   assert.match(resources.DataBucketPolicy, /Principal: \{Service: ses.amazonaws.com\}/);
   assert.match(resources.DataBucketPolicy, /imports\/ready\/\*/);
   assert.match(resources.DataBucketPolicy, /aws:SourceAccount/);
@@ -245,18 +249,18 @@ function allowed(policy) {
 const apiOperations = {
   kms: 'GenerateMac',
   ses: 'GetAccount GetEmailIdentity GetConfigurationSet GetConfigurationSetEventDestinations GetContactList ListContacts GetContact CreateContact UpdateContact DeleteContact GetSuppressedDestination GetImportJob CreateEmailTemplate GetEmailTemplate TestRenderEmailTemplate SendEmail',
-  ddb: 'GetItem PutItem UpdateItem Query TransactWriteItems', s3: 'PutObject GetObject HeadObject DeleteObject', sns: 'Publish',
+  ddb: 'GetItem PutItem UpdateItem DeleteItem Query TransactWriteItems', s3: 'PutObject GetObject HeadObject DeleteObject ListObjectsV2', sns: 'Publish',
   sfn: 'StartExecution DescribeExecution SendTaskSuccess SendTaskFailure', scheduler: 'CreateSchedule DeleteSchedule GetSchedule',
   cognito: 'AdminGetUser AdminListGroupsForUser ListUsersInGroup AdminCreateUser AdminAddUserToGroup AdminRemoveUserFromGroup AdminDisableUser AdminEnableUser AdminUserGlobalSignOut AdminSetUserMFAPreference AdminResetUserPassword', cloudwatch: 'GetMetricData DescribeAlarms', ssm: 'GetParameter', secrets: 'GetSecretValue', lambda: 'Invoke',
 };
 const workerOperations = {
   kms: 'GenerateMac DescribeKey',
-  sfn: 'DescribeExecution', scheduler: 'GetSchedule',
-  ses: 'GetAccount GetEmailIdentity GetConfigurationSet GetConfigurationSetEventDestinations GetContactList ListContacts GetContact DeleteContact SendEmail CreateImportJob GetImportJob DeleteEmailTemplate',
-  ddb: 'GetItem PutItem UpdateItem DeleteItem Query BatchGetItem', s3: 'PutObject GetObject HeadObject DeleteObject', cloudwatch: 'GetMetricData DescribeAlarms', sns: 'Publish', ssm: 'GetParameter', secrets: 'GetSecretValue',
+  sfn: 'DescribeExecution ListExecutions SendTaskFailure', scheduler: 'GetSchedule DeleteSchedule', lambda: 'Invoke',
+  ses: 'GetAccount GetEmailIdentity GetConfigurationSet GetConfigurationSetEventDestinations GetContactList ListContacts GetContact DeleteContact DeleteSuppressedDestination SendEmail CreateImportJob GetImportJob DeleteEmailTemplate',
+  ddb: 'GetItem PutItem UpdateItem DeleteItem Query Scan BatchGetItem', s3: 'PutObject GetObject HeadObject DeleteObject ListObjectsV2', cloudwatch: 'GetMetricData DescribeAlarms', sns: 'Publish', ssm: 'GetParameter', secrets: 'GetSecretValue',
 };
 const prefixes = {kms:'kms',ses:'ses',ddb:'dynamodb',s3:'s3',sfn:'states',scheduler:'scheduler',cognito:'cognito-idp',cloudwatch:'cloudwatch',sns:'sns',ssm:'ssm',secrets:'secretsmanager',lambda:'lambda'};
-const iamOperation = (service, operation) => service === 's3' && operation === 'HeadObject' ? 'GetObject' : service === 'lambda' && operation === 'Invoke' ? 'InvokeFunction' : service === 'ddb' && operation === 'TransactWriteItems' ? 'PutItem' : operation;
+const iamOperation = (service, operation) => service === 's3' && operation === 'ListObjectsV2' ? 'ListBucket' : service === 's3' && operation === 'HeadObject' ? 'GetObject' : service === 'lambda' && operation === 'Invoke' ? 'InvokeFunction' : service === 'ddb' && operation === 'TransactWriteItems' ? 'PutItem' : operation;
 
 for (const [name, operations] of [['Api',apiOperations],['Worker',workerOperations]]) {
   test(`12.6 ${name} IAMの許可操作を設計表とaws.jsの全操作へ照合（過不足なし）`, () => {
@@ -491,6 +495,45 @@ test('15.3 全スクリプトはstrict bashで、AWS CLI以外の実行環境・
     assert.ifError(result.error);
     assert.equal(result.status,0,`${name}: ${result.stderr}`);
   }
+});
+
+test('13.7 PITRは両方の停止・実行の一覧と停止確認・明示確認・復元完了待機を必須にする', () => {
+  for (const env of [{ MOCK_SENDING: 'true' }, { MOCK_SET_SENDING: 'True' }]) {
+    const result = runScript('restore-table.sh', ['dev'], env);
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /put-configuration-set-sending-options/);
+    assert.doesNotMatch(result.calls, /stop-execution|restore-table-to-point-in-time/);
+  }
+  const arn = 'arn:aws:states:ap-northeast-1:111111111111:execution:ht2-dev:example';
+  const rejected = runScript('restore-table.sh', ['dev'], { MOCK_RUNNING_ARNS: arn }, 'no\n');
+  assert.notEqual(rejected.status, 0); assert.match(rejected.stdout, /execution:ht2-dev:example/);
+  assert.doesNotMatch(rejected.calls, /stop-execution|restore-table-to-point-in-time/);
+  const passed = runScript('restore-table.sh', ['dev'], { MOCK_RUNNING_ARNS: arn, MOCK_CRLF: '1' }, 'stop 111111111111 dev\nrestore 111111111111 dev\n');
+  assert.equal(passed.status, 0, passed.stderr);
+  assert.match(passed.calls, /stepfunctions stop-execution/);
+  assert.match(passed.calls, /--target-table-name ht2-dev-restore-\d{12} --use-latest-restorable-time/);
+  assert.match(passed.calls, /dynamodb wait table-exists/);
+  assert.doesNotMatch(passed.calls, /scheduler |put-parameter|put-configuration-set-sending-options|lambda invoke/);
+  const specific = runScript('restore-table.sh', ['dev', '2026-01-01T00:00:00Z'], {}, 'restore 111111111111 dev\n');
+  assert.equal(specific.status, 0, specific.stderr); assert.match(specific.calls, /--restore-date-time 2026-01-01T00:00:00Z/);
+  for (const env of [{ MOCK_RUNNING_LEFT: '1' }, { MOCK_EXECUTIONS_ERROR: '1' }, { MOCK_STOP_ERROR: '1', MOCK_RUNNING_ARNS: arn }]) {
+    const result = runScript('restore-table.sh', ['dev'], env, 'stop 111111111111 dev\nrestore 111111111111 dev\n');
+    assert.notEqual(result.status, 0); assert.doesNotMatch(result.calls, /restore-table-to-point-in-time/);
+  }
+});
+
+test('4.4 保持期間は短縮だけを許し、復元報告・全S3接頭辞とIAMを照合する', () => {
+  const parameters = blocks(main, 'Parameters');
+  for (const [name, max] of Object.entries({ ImportRetentionDays: 7, SnapshotRetentionDays: 30, BackupRetentionDays: 90, EventLogRetentionDays: 90 })) {
+    assert.match(parameters[name], new RegExp(`Default: ${max}\\n    MinValue: 1\\n    MaxValue: ${max}\\n`));
+    for (const value of [0, max + 1]) assert.equal(value >= 1 && value <= max, false);
+  }
+  assert.match(resources.EventsRole, /Action: \['logs:CreateLogStream', 'logs:PutLogEvents'\]\n\s+Resource:.*log-group:\/aws\/lambda\/ht2-\$\{Env\}-events:\*/);
+  const restore = resources.WorkerPolicy.split(/\n          - /).find((s) => s.includes("'dynamodb:Scan'"));
+  assert.match(restore, /Action: \['dynamodb:Scan', 'dynamodb:GetItem'\]/);
+  assert.match(restore, /table\/ht2-\$\{Env\}-restore-\*/); assert.doesNotMatch(restore, /PutItem|UpdateItem|DeleteItem/);
+  assert.doesNotMatch(resources.WorkerPolicy.split('Sid: DenyDestructiveSes')[1].split('- Sid:')[0], /DeleteSuppressedDestination/);
+  assert.match(resources.ApiPolicy.split('Sid: DenyDestructiveSes')[1], /DeleteSuppressedDestination/);
 });
 
 test('15.3 packageは最新のsrcとpackage.jsonだけをbackendへそろえる', () => {

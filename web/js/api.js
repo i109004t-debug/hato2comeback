@@ -1,6 +1,6 @@
 export const ERROR_MESSAGES = Object.freeze({
   SELF_CHANGE_FORBIDDEN: '自分自身のアカウントは変更できません。別の管理者に依頼してください。',
-  LAST_ADMIN: '有効な管理者が2人未満になる無効化・役割変更はできません。先に管理者を追加してください。',
+  LAST_ADMIN: '有効な管理者を0人にはできません。1人になる変更は警告の確認が必要です。一覧を読み直して確認してください。',
   REAUTH_REQUIRED: 'スタッフを変更するには、ログアウトしてからログインし直してください。',
   CHECK_HASH_CHANGED: '検査を始めた後に送信設定かDNSが変わりました。新しい受入検査を始めてください。',
   OUTSIDE_APPROVED_WINDOW: '承認された送信期間の範囲外です。期間内の日時を指定してください。',

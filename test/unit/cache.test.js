@@ -44,6 +44,19 @@ test('12.7 設定の全既定値と安全側の欠落・不正値の扱い', () 
   for (const input of [{ sending_enabled: 'true' }, { batch_size: 201 }, { progress_every: 21 }, { max_rate_per_sec: 0 }, { daily_send_cap: -1 }, { ses_rate_safety_factor: 1.1 }, { health_check_seconds: 61 }, { delivery_check_required: false }, { unknown: 1 }, { nonprod_allowlist: ['bad'] }, { reputation_alarms: [] }, null]) assert.throws(() => validateConfig(input, 'prod'), { code: 'CONFIGURATION_INVALID' });
 });
 
+test('13.7 復元の停止点検は5秒以内でも設定を取り直し、取得失敗を隠さない', async () => {
+  let input = '{"sending_enabled":false}';
+  const config = createConfig({ env: 'stg', now: () => 0, ssm: { getParameter: async () => {
+    if (input instanceof Error) throw input;
+    return { Parameter: { Value: input } };
+  } } });
+  assert.equal((await config.get()).sending_enabled, false);
+  input = '{"sending_enabled":true}';
+  assert.equal((await config.get({ force: true })).sending_enabled, true);
+  input = new Error('SSM unavailable');
+  await assert.rejects(config.get({ force: true }), /SSM unavailable/);
+});
+
 test('キャッシュ期限後の取得失敗・不正JSONに古い送信許可を返さない', async () => {
   let time = 0;
   let input = '{"sending_enabled":true}';

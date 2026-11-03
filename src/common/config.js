@@ -66,8 +66,8 @@ export function createConfig({ ssm, s3, dataBucket, env, now = defaultNow }) {
   let pending;
   return {
     validUntil: () => cache?.expires ?? 0,
-    async get() {
-      if (cache && now() < cache.expires) return structuredClone(cache.value);
+    async get({ force = false } = {}) {
+      if (!force && cache && now() < cache.expires) return structuredClone(cache.value);
       if (!pending) {
         const started = now();
         pending = (async () => {

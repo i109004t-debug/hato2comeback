@@ -1,4 +1,8 @@
 [
+  {"ParameterKey": "ImportRetentionDays", "ParameterValue": "7"},
+  {"ParameterKey": "SnapshotRetentionDays", "ParameterValue": "30"},
+  {"ParameterKey": "BackupRetentionDays", "ParameterValue": "90"},
+  {"ParameterKey": "EventLogRetentionDays", "ParameterValue": "90"},
   {"ParameterKey": "RuntimeVersionArn", "ParameterValue": ""},
   {"ParameterKey": "AuditLockMode", "ParameterValue": "GOVERNANCE"},
   {"ParameterKey": "AuditLockDays", "ParameterValue": "400"},

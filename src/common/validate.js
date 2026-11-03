@@ -136,7 +136,7 @@ export const routeSchemas = Object.freeze({
   'delivery-check.submit': record({ note }),
   'staff.list': empty,
   'staff.create': record({ email, name: plainText(1, 50), roles: array(enumeration('admin', 'sender', 'approver', 'viewer'), 1, 4) }),
-  'staff.change': record({ roles: array(enumeration('admin', 'sender', 'approver', 'viewer'), 1, 4) }, []),
+  'staff.change': record({ roles: array(enumeration('admin', 'sender', 'approver', 'viewer'), 1, 4), confirm_single_admin: boolean }, []),
   'readiness.get': empty,
 });
 

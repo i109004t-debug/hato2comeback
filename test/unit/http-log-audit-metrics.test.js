@@ -120,7 +120,7 @@ test('4.3 監査キーはUTC月・ISO8601#ULID、1年TTL・addr_id・条件付�
 test('13.2 全アプリメトリクスをEMFで出力し、機密情報を次元に入れない', () => {
   const lines = [];
   const metrics = createMetrics({ env: 'prod', now: () => 1000, write: (line) => lines.push(line) });
-  assert.deepEqual(Object.keys(METRIC_UNITS).sort(), 'AuditTamper Accepted Failed Unknown Throttled Paused NeedsReview StartFailed PrepareRecipients PrepareSeconds SesBusy ImportRows ImportSkipped ImportRejected ApiError4xx ApiError5xx ApiLatencyMs SesSendingEnabled SesMax24HourSend SesSentLast24Hours SesMaxSendRate'.split(' ').sort());
+  assert.deepEqual(Object.keys(METRIC_UNITS).sort(), 'AuditTamper EventsIgnored EventIndexSkipped Accepted Failed Unknown Throttled Paused NeedsReview StartFailed PrepareRecipients PrepareSeconds SesBusy ImportRows ImportSkipped ImportRejected ApiError4xx ApiError5xx ApiLatencyMs SesSendingEnabled SesMax24HourSend SesSentLast24Hours SesMaxSendRate'.split(' ').sort());
   assert.equal(METRIC_UNITS.PrepareSeconds, 'Seconds');
   assert.equal(METRIC_UNITS.ApiLatencyMs, 'Milliseconds');
   for (const name of Object.keys(METRIC_UNITS)) {

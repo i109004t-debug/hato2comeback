@@ -49,6 +49,14 @@ mock_aws() {
         *) printf 'reviewed\n' ;;
       esac ;;
     'sesv2 get-contact-list') printf 'kaiho\tevent\n' ;;
+    'sesv2 get-configuration-set') printf '%s\n' "${MOCK_SET_SENDING:-False}" ;;
+    'stepfunctions list-executions')
+      [[ ${MOCK_EXECUTIONS_ERROR:-0} == 0 ]] || return 254
+      if [[ $args == *'length(executions)'* ]]; then printf '%s\n' "${MOCK_RUNNING_LEFT:-0}"; else printf '%s\n' "${MOCK_RUNNING_ARNS:-}"; fi ;;
+    'stepfunctions stop-execution') [[ ${MOCK_STOP_ERROR:-0} == 0 ]] || return 254 ;;
+    'dynamodb restore-table-to-point-in-time') [[ ${MOCK_RESTORE_ERROR:-0} == 0 ]] || return 254; printf '{}\n' ;;
+    'dynamodb wait') [[ ${MOCK_RESTORE_WAIT_ERROR:-0} == 0 ]] || return 254 ;;
+    'dynamodb describe-table') printf '2026-11-03T09:00:00.000Z\n' ;;
     'sesv2 get-account') [[ ${MOCK_ACCOUNT_ERROR:-0} == 0 ]] || return 254; printf '%s\n' "${MOCK_PRODUCTION:-True}" ;;
     'lambda invoke')
       local sdk_result=${MOCK_SDK_RESULT:-}

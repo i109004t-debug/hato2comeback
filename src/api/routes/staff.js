@@ -15,16 +15,16 @@ async function list({ runtime }) {
 async function change(ctx) {
   const { runtime, params, body, user, claims, audit, requestId } = ctx;
   assertRecentAuthentication(claims, runtime.now());
-  // 管理者の同時降格を防ぐ。失敗・結果不明ではロックを残してAWS管理者へ調査を依頼する。
+  // Cognitoの変更は再試行しない。結果不明の排他も5分で失効する。
   const previous = await runtime.store.get('LOCK', 'STAFF');
-  if (previous?.owner) throw new AppError('STATE_CONFLICT', 409, 'スタッフ変更の結果を確認してください。');
-  const held = await updateRecord(runtime, 'LOCK', 'STAFF', previous, { owner: requestId, acquired_at: timestamp(runtime) });
+  if (previous?.owner && !(previous.expires_at_ms <= runtime.now())) throw new AppError('STATE_CONFLICT', 409, 'スタッフ変更中です。一覧で結果を確かめてください。');
+  const held = await updateRecord(runtime, 'LOCK', 'STAFF', previous, { owner: requestId, acquired_at: timestamp(runtime), expires_at_ms: runtime.now() + 300000 });
   let mutated = false;
   let complete = false;
+  const action = params.action ?? 'create';
   try {
     let target;
     let input;
-    const action = params.action ?? 'create';
     if (action !== 'create') {
       target = await runtime.cognito.adminGetUser({ UserPoolId: runtime.userPoolId, Username: params.username });
       const attributes = Object.fromEntries((target.UserAttributes ?? []).map(({ Name, Value }) => [Name, Value]));
@@ -33,10 +33,13 @@ async function change(ctx) {
       if (['roles', 'disable'].includes(action)) {
         const items = await listStaff(runtime);
         const admins = enabledAdmins(items);
-        if (admins.some((item) => item.username === params.username) && (action === 'disable' || !body.roles.includes('admin')) && admins.length <= 2) throw new AppError('LAST_ADMIN', 409, '有効な管理者を2人以上残してください。');
+        if (admins.some((item) => item.username === params.username) && (action === 'disable' || !body.roles.includes('admin'))) {
+          const remaining = admins.length - 1;
+          if (remaining === 0 || remaining === 1 && body.confirm_single_admin !== true) throw new AppError('LAST_ADMIN', 409, remaining === 0 ? '有効な管理者を0人にはできません。' : '管理者が1人になります。警告を確認してください。');
+        }
       }
     }
-    await audit(`STAFF_${action.toUpperCase().replaceAll('-', '_')}`, target ? params.username : 'staff', { phase: 'REQUESTED', ...(body.roles ? { roles: body.roles } : {}) });
+    await audit(`STAFF_${action.toUpperCase().replaceAll('-', '_')}`, target ? params.username : 'staff', { phase: 'REQUESTED', confirm_single_admin: body.confirm_single_admin === true, ...(body.roles ? { roles: body.roles } : {}) });
     mutated = true;
     if (action === 'create') {
       const response = await runtime.cognito.adminCreateUser({ UserPoolId: runtime.userPoolId, Username: body.email, UserAttributes: [{ Name: 'email', Value: body.email }, { Name: 'name', Value: body.name }], DesiredDeliveryMediums: ['EMAIL'] });
@@ -60,9 +63,15 @@ async function change(ctx) {
     complete = true;
     runtime.authz.clear();
     return { status: 'DONE', username: input.Username };
+  } catch (error) {
+    if (mutated) {
+      await audit(`STAFF_${action.toUpperCase().replaceAll('-', '_')}`, params.username ?? 'staff', { phase: 'UNKNOWN' });
+      throw new AppError('INTERNAL', 500, 'スタッフの変更を確定できません。一覧で結果を確かめてください。');
+    }
+    throw error;
   } finally {
     try {
-      if (!mutated || complete) await updateRecord(runtime, 'LOCK', 'STAFF', held, {}, ['owner', 'acquired_at']);
+      if (!mutated || complete) await updateRecord(runtime, 'LOCK', 'STAFF', held, {}, ['owner', 'acquired_at', 'expires_at_ms']);
     } finally {
       if (mutated) {
         runtime.authz.clear();

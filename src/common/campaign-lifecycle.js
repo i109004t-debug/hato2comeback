@@ -1,5 +1,6 @@
 import { updateCampaign, timestamp } from './records.js';
 import { campaignDeadline, remainingRecipients } from './forecast.js';
+import { objectPages } from './storage.js';
 
 export function unknownReviewFields(campaign, now) {
   const count = campaign.counts?.unknown ?? 0;
@@ -13,6 +14,7 @@ export async function expireCampaign(runtime, campaign, config, fields = {}) {
   const deadline = campaignDeadline(campaign, config);
   if (!deadline || runtime.now() < Date.parse(deadline) || !['SCHEDULED', 'QUEUED', 'SENDING', 'PAUSED'].includes(campaign.status)) return campaign;
   const saved = await updateCampaign(runtime, campaign, [campaign.status], { ...fields, status: 'CANCELLED', cancel_reason: 'DEADLINE_PASSED', deadline_at: deadline, completed_at: timestamp(runtime), unsent_count: remainingRecipients({ ...campaign, ...fields }), ...unknownReviewFields(campaign, runtime.now()) }, ['task_token']);
+  if (saved.unknown_review?.status !== 'OPEN') await deleteSnapshot(runtime, saved);
   await runtime.notify('DEADLINE_PASSED', campaign.campaign_id);
   if (campaign.task_token) await runtime.sfn.sendTaskFailure({ taskToken: campaign.task_token, error: 'DeadlinePassed' });
   return saved;
@@ -26,5 +28,13 @@ export async function notifyScheduleDelay(runtime, campaign) {
 }
 
 export async function deleteSnapshot(runtime, campaign) {
-  for (let chunk = 0; chunk < (campaign.chunks_total ?? 0); chunk += 1) await runtime.s3.deleteObject({ Bucket: runtime.dataBucket, Key: `recipients/${campaign.campaign_id}/${String(chunk).padStart(5, '0')}.jsonl` });
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(campaign.campaign_id ?? '')) throw new TypeError('Invalid campaign identifier');
+  if (campaign.unknown_review?.status === 'OPEN') return;
+  const prefix = `recipients/${campaign.campaign_id}/`;
+  for await (const page of objectPages(runtime, runtime.dataBucket, prefix)) {
+    for (const { Key } of page) {
+      if (!Key?.startsWith(prefix)) throw new Error('Invalid snapshot key');
+      await runtime.s3.deleteObject({ Bucket: runtime.dataBucket, Key });
+    }
+  }
 }

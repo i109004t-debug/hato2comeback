@@ -162,7 +162,7 @@ async function campaigns(runtime) {
   for await (let campaign of allRecords(runtime, 'CAMPAIGN')) {
     try {
       if (await reviewUnsupportedSchema(runtime, campaign)) continue;
-      if (['COMPLETED', 'CANCELLED'].includes(campaign.status) && campaign.unknown_review?.status === 'RESOLVED' && !campaign.snapshot_deleted_at) {
+      if (['COMPLETED', 'CANCELLED'].includes(campaign.status) && campaign.unknown_review?.status !== 'OPEN' && !campaign.snapshot_deleted_at) {
         await deleteSnapshot(runtime, campaign);
         campaign = await updateCampaign(runtime, campaign, [campaign.status], { snapshot_deleted_at: timestamp(runtime) });
       }

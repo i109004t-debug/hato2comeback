@@ -29,6 +29,7 @@ export function managementFixture(options = {}) {
     createContact: async (input) => { f.changes.push(input); if (f.contacts.some((item) => item.EmailAddress === input.EmailAddress)) throw failure('AlreadyExistsException', 409); f.contacts.push(structuredClone(input)); return {}; },
     updateContact: async (input) => { f.changes.push(structuredClone(input)); const index = f.contacts.findIndex((item) => item.EmailAddress === input.EmailAddress); f.contacts[index] = structuredClone(input); return {}; },
     deleteContact: async (input) => { f.changes.push(input); f.contacts = f.contacts.filter((item) => item.EmailAddress !== input.EmailAddress); return {}; },
+    deleteSuppressedDestination: async () => ({}),
     createEmailTemplate: async (input) => { if (f.templates.has(input.TemplateName)) throw failure('AlreadyExistsException', 409); f.templates.set(input.TemplateName, structuredClone(input.TemplateContent)); return {}; },
     getEmailTemplate: async (input) => ({ TemplateContent: structuredClone(f.templates.get(input.TemplateName)) }),
     testRenderEmailTemplate: async (input) => ({ RenderedTemplate: `Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${Buffer.from(f.templates.get(input.TemplateName).Text).toString('base64')}` }),
@@ -65,6 +66,7 @@ export function managementFixture(options = {}) {
       adminResetUserPassword: async (input) => { f.staffCalls.push({ method: 'password', input }); },
     },
     sfn: {
+      listExecutions: async () => ({ executions: [...f.executions.entries()].map(([name]) => ({ name, startDate: new Date(f.deps.now()), status: 'RUNNING' })) }),
       startExecution: async (input) => { if (f.executions.has(input.name)) throw failure('ExecutionAlreadyExists', 400); f.executions.set(input.name, input); return { executionArn: 'arn:aws:states:ap-northeast-1:123456789012:execution:ht2:' + input.name }; },
       describeExecution: async (input) => {
         const execution = f.executions.get(input.executionArn.split(':').at(-1));

@@ -18,6 +18,8 @@ import { daily, authentication } from './modes/daily.js';
 import { backfillContacts } from './modes/contact-backfill.js';
 import { rekeyContacts } from './modes/rekey.js';
 import { createContactLock } from '../common/contact-lock.js';
+import { restoreApply, restoreCheck } from './modes/restore.js';
+import { eraseSuppression } from './modes/erase-suppression.js';
 
 export function createHandler(deps = {}) {
   const environment = deps.environment ?? process.env;
@@ -27,6 +29,7 @@ export function createHandler(deps = {}) {
     senderDomain: environment.SENDER_DOMAIN, region: environment.AWS_REGION ?? 'ap-northeast-1',
     eventStreamArn: environment.EVENT_STREAM_ARN, alertTopicArn: environment.ALERT_TOPIC_ARN,
     stateMachineArn: environment.STATE_MACHINE_ARN, scheduleGroup: environment.SCHEDULE_GROUP,
+    workerFunctionArn: environment.WORKER_FUNCTION_ARN,
     eraseMacKeyId: environment.ERASE_MAC_KEY_ID, auditArchiveBucket: environment.AUDIT_ARCHIVE_BUCKET,
     ...createTime(deps), ...deps,
   };
@@ -55,8 +58,11 @@ export function createHandler(deps = {}) {
   return async (event, context = {}) => {
     const logger = deps.logger ?? createLogger({ fn: 'worker', req_id: context.awsRequestId, now: base.now });
     try {
-      if (!event || !['prepare', 'send', 'finish', 'import', 'daily', 'contact-backfill', 'rekey', 'sdk-check', 'auth-check'].includes(event.mode)) throw invalid('mode');
+      if (!event || !['prepare', 'send', 'finish', 'import', 'daily', 'contact-backfill', 'rekey', 'sdk-check', 'auth-check', 'restore-apply', 'restore-check', 'erase-suppression'].includes(event.mode)) throw invalid('mode');
       if (event.mode === 'sdk-check') return await checkAwsSdk({ load: deps.sdkLoad, loadVersion: deps.sdkVersionLoad });
+      if (event.mode === 'restore-apply') return await restoreApply(event, initialize(context));
+      if (event.mode === 'restore-check') return await restoreCheck(event, initialize(context));
+      if (event.mode === 'erase-suppression') return await eraseSuppression(event, initialize(context));
       if (event.mode === 'auth-check') return await authentication(initialize(context));
       if (event.mode === 'rekey') return await rekeyContacts(event, initialize(context), context);
       if (event.mode === 'contact-backfill') return await backfillContacts(event, initialize(context), context);

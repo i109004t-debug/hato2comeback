@@ -10,12 +10,12 @@ export async function mount(ctx) {
   const gate = createActionGate();
   let uncertain = false;
   function permissions() {
-    for (const control of root.querySelectorAll('button, input, select')) control.disabled = gate.busy || uncertain || control.dataset.self === 'true';
+    for (const control of root.querySelectorAll('button, input, select')) control.disabled = gate.busy || uncertain && control !== reload || control.dataset.self === 'true';
   }
   async function perform(fn, mutation = false) {
     return gate.run(async () => {
       permissions(); showMessage(root, '');
-      try { await fn(); } catch (error) { if (mutation && isUncertainMutation(error)) uncertain = true; showMessage(root, errorText(error), true); }
+      try { await fn(); } catch (error) { if (mutation && isUncertainMutation(error)) uncertain = true; showMessage(root, `${errorText(error)}${mutation && isUncertainMutation(error) ? ' 一覧で結果を確かめてください。変更ロックは5分で失効します。' : ''}`, true); }
     }).finally(permissions);
   }
   async function load() {
@@ -34,7 +34,12 @@ export async function mount(ctx) {
           const selected = [...roles.selectedOptions].map((option) => option.value);
           if (action === 'roles' && !selected.length) throw new ApiError('INVALID_REQUEST');
           if (!await confirmDialog(`${user.name || user.email}：${label}を行います。変更は監査ログに残ります。`)) return;
-          await ctx.api.request(`/staff/${user.username}/${action}`, { method: 'POST', body: action === 'roles' ? { roles: selected } : {} });
+          const body = action === 'roles' ? { roles: selected } : {};
+          if (user.enabled && user.status === 'CONFIRMED' && user.roles.includes('admin') && (action === 'disable' || action === 'roles' && !selected.includes('admin')) && response.enabled_admins === 2) {
+            if (!await confirmDialog('この変更で有効な管理者が1人になります。その人がログインできなくなるとAWS管理者による復旧が必要です。管理者を2人以上にすることを推奨します。1人になる変更を確定しますか。')) return;
+            body.confirm_single_admin = true;
+          }
+          await ctx.api.request(`/staff/${user.username}/${action}`, { method: 'POST', body });
           await load(); showMessage(root, 'スタッフの変更を保存しました。役割は60秒以内に反映されます。');
         }, true));
         actions.append(button);
@@ -52,5 +57,8 @@ export async function mount(ctx) {
       form.reset(); await load(); showMessage(root, 'スタッフを追加しました。Cognitoから届く仮パスワードでログインし、パスワード変更と認証アプリの登録を行ってください。');
     }, true);
   });
+  const reload = element('button', '一覧で結果を確かめる'); reload.type = 'button';
+  reload.addEventListener('click', () => perform(async () => { await load(); uncertain = false; }));
+  root.append(reload);
   await perform(load);
 }

@@ -39,6 +39,26 @@ Parameters:
     Type: String
     Default: ''
     AllowedPattern: '(^$|arn:aws:lambda:[a-z0-9-]+::runtime:[a-f0-9]+)'
+  ImportRetentionDays:
+    Type: Number
+    Default: 7
+    MinValue: 1
+    MaxValue: 7
+  SnapshotRetentionDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 30
+  BackupRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 90
+  EventLogRetentionDays:
+    Type: Number
+    Default: 90
+    MinValue: 1
+    MaxValue: 90
   WorkerReservedConcurrency:
     Type: Number
     Default: -1
@@ -107,13 +127,14 @@ Resources:
       BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]}
       LifecycleConfiguration:
         Rules:
-          - {Id: Staging, Status: Enabled, Prefix: imports/staging/, ExpirationInDays: 7}
-          - {Id: ImportPreview, Status: Enabled, Prefix: imports/preview/, ExpirationInDays: 7}
-          - {Id: Ready, Status: Enabled, Prefix: imports/ready/, ExpirationInDays: 365}
+          - {Id: Staging, Status: Enabled, Prefix: imports/staging/, ExpirationInDays: !Ref ImportRetentionDays}
+          - {Id: ImportPreview, Status: Enabled, Prefix: imports/preview/, ExpirationInDays: !Ref ImportRetentionDays}
+          - {Id: Ready, Status: Enabled, Prefix: imports/ready/, ExpirationInDays: !Ref ImportRetentionDays}
           - {Id: Reports, Status: Enabled, Prefix: imports/report/, ExpirationInDays: 365}
-          - {Id: Recipients, Status: Enabled, Prefix: recipients/, ExpirationInDays: 30}
+          - {Id: Recipients, Status: Enabled, Prefix: recipients/, ExpirationInDays: !Ref SnapshotRetentionDays}
           - {Id: Results, Status: Enabled, Prefix: results/, ExpirationInDays: 180}
-          - {Id: Contacts, Status: Enabled, Prefix: backups/contacts/, ExpirationInDays: 365}
+          - {Id: Contacts, Status: Enabled, Prefix: backups/contacts/, ExpirationInDays: !Ref BackupRetentionDays}
+          - {Id: RestoreReports, Status: Enabled, Prefix: restore-reports/, ExpirationInDays: 365}
           - {Id: DeliveryChecks, Status: Enabled, Prefix: delivery-checks/, ExpirationInDays: 180}
           - {Id: Multipart, Status: Enabled, AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}}
   AuditArchiveBucket:
@@ -150,8 +171,8 @@ Resources:
       BucketEncryption: {ServerSideEncryptionConfiguration: [{ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}}]}
       LifecycleConfiguration:
         Rules:
-          - {Id: Events, Status: Enabled, Prefix: ses-events/, ExpirationInDays: 180}
-          - {Id: Errors, Status: Enabled, Prefix: errors/, ExpirationInDays: 180}
+          - {Id: Events, Status: Enabled, Prefix: ses-events/, ExpirationInDays: !Ref EventLogRetentionDays}
+          - {Id: Errors, Status: Enabled, Prefix: errors/, ExpirationInDays: !Ref EventLogRetentionDays}
           - {Id: Queries, Status: Enabled, Prefix: athena-results/, ExpirationInDays: 30}
   DataBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -276,6 +297,9 @@ Resources:
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
+              - Effect: Allow
+                Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ht2-${Env}-events:*'
               - Effect: Allow
                 Action: ['dynamodb:PutItem']
                 Resource: !GetAtt Table.Arn
@@ -917,6 +941,10 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
+            Action: ['dynamodb:DeleteItem']
+            Resource: !GetAtt Table.Arn
+            Condition: {'ForAllValues:StringLike': {'dynamodb:LeadingKeys': ['ADDR#*']}}
+          - Effect: Allow
             Action: ['s3:DeleteObject']
             Resource: [!Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/imports/staging/*']
           - Effect: Allow
@@ -997,6 +1025,10 @@ Resources:
             Resource: !GetAtt Table.Arn
             Condition:
               'ForAnyValue:StringLike': {'dynamodb:LeadingKeys': ['AUDIT#*']}
+          - Sid: DenyAuditArchiveMutation
+            Effect: Deny
+            Action: ['s3:BypassGovernanceRetention', 's3:PutObjectRetention', 's3:PutObjectLegalHold', 's3:DeleteObject*', 's3:PutBucketObjectLockConfiguration']
+            Resource: [!GetAtt AuditArchiveBucket.Arn, !Sub '${AuditArchiveBucket.Arn}/*']
   WorkerPolicy:
     Type: AWS::IAM::Policy
     Properties:
@@ -1006,8 +1038,23 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
+            Action: ['dynamodb:Scan', 'dynamodb:GetItem']
+            Resource: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/ht2-${Env}-restore-*'
+          - Effect: Allow
+            Action: ['states:ListExecutions']
+            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ht2-${Env}'
+          - Effect: Allow
+            Action: ['states:SendTaskFailure']
+            Resource: '*'
+          - Effect: Allow
+            Action: ['lambda:InvokeFunction']
+            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ht2-${Env}-worker'
+          - Effect: Allow
+            Action: ['ses:DeleteSuppressedDestination']
+            Resource: '*'
+          - Effect: Allow
             Action: ['s3:DeleteObject']
-            Resource: !Sub '${DataBucket.Arn}/recipients/*'
+            Resource: [!Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/imports/staging/*']
           - Effect: Allow
             Action: ['kms:GenerateMac', 'kms:DescribeKey']
             Resource: !GetAtt EraseMacKey.Arn
@@ -1020,7 +1067,7 @@ Resources:
           - Effect: Allow
             Action: ['dynamodb:DeleteItem']
             Resource: !GetAtt Table.Arn
-            Condition: {'ForAllValues:StringEquals': {'dynamodb:LeadingKeys': [CONTACT_META]}}
+            Condition: {'ForAllValues:StringLike': {'dynamodb:LeadingKeys': [CONTACT_META, 'ADDR#*']}}
           - Effect: Allow
             Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
             Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ht2-${Env}-worker:*'
@@ -1058,10 +1105,10 @@ Resources:
             Resource: !GetAtt DataBucket.Arn
           - Effect: Allow
             Action: ['s3:GetObject']
-            Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*', !Sub '${DataBucket.Arn}/delivery-checks/*', !Sub '${DataBucket.Arn}/allowlists/*']
+            Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*', !Sub '${DataBucket.Arn}/delivery-checks/*', !Sub '${DataBucket.Arn}/allowlists/*', !Sub '${DataBucket.Arn}/restore-reports/*']
           - Effect: Allow
             Action: ['s3:PutObject']
-            Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*']
+            Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*', !Sub '${DataBucket.Arn}/restore-reports/*']
           - Effect: Allow
             Action: ['sns:Publish']
             Resource: !Ref AlertTopic
@@ -1069,7 +1116,7 @@ Resources:
             Action: ['states:DescribeExecution']
             Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:ht2-${Env}:*'
           - Effect: Allow
-            Action: ['scheduler:GetSchedule']
+            Action: ['scheduler:GetSchedule', 'scheduler:DeleteSchedule']
             Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/ht2-${Env}/ht2-*'
           - Sid: DenyFixedTemplateMutation
             Effect: Deny
@@ -1077,7 +1124,7 @@ Resources:
             Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/ht2-c-*'
           - Sid: DenyDestructiveSes
             Effect: Deny
-            Action: ['ses:DeleteContactList', 'ses:UpdateContactList', 'ses:DeleteEmailIdentity', 'ses:DeleteSuppressedDestination', 'ses:PutAccount*']
+            Action: ['ses:DeleteContactList', 'ses:UpdateContactList', 'ses:DeleteEmailIdentity', 'ses:PutAccount*']
             Resource: '*'
           - Sid: DenyAuditMutation
             Effect: Deny
@@ -1085,6 +1132,10 @@ Resources:
             Resource: !GetAtt Table.Arn
             Condition:
               'ForAnyValue:StringLike': {'dynamodb:LeadingKeys': ['AUDIT#*']}
+          - Sid: DenyAuditArchiveMutation
+            Effect: Deny
+            Action: ['s3:BypassGovernanceRetention', 's3:PutObjectRetention', 's3:PutObjectLegalHold', 's3:DeleteObject*', 's3:PutBucketObjectLockConfiguration']
+            Resource: [!GetAtt AuditArchiveBucket.Arn, !Sub '${AuditArchiveBucket.Arn}/*']
   StateMachinePolicy:
     Type: AWS::IAM::Policy
     Properties:

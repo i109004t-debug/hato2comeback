@@ -6,6 +6,7 @@ import { addressHash } from '../../common/log.js';
 import { timestamp, updateRecord } from '../../common/records.js';
 import { contactAttributes, getContactMetadata, ensureContactMetadata, applyContactMetadata, eraseContactMetadata } from '../../common/contact-metadata.js';
 import { isErased, eraseMatch } from '../../common/erase.js';
+import { deleteDeliveryIndex } from '../../common/storage.js';
 import { deliveryEvents } from '../../common/delivery-events.js';
 import { contactMetadataKey } from '../../common/contact-metadata.js';
 
@@ -121,6 +122,7 @@ async function change(ctx) {
   const blocked = new Set(metadata.blocked_topics ?? []);
   let blockedAll = metadata.blocked_all === true;
   if (route.operation === 'contacts.unsubscribe') {
+    action = 'CONTACT_STOP';
     if (body.scope === 'ALL') { all = true; blockedAll = true; delete attrs.name; }
     else { preferences.set(body.scope, 'OPT_OUT'); blocked.add(body.scope); }
   } else if (route.operation === 'contacts.reconsent') {
@@ -149,8 +151,10 @@ async function change(ctx) {
     if (Object.hasOwn(body, 'name')) attrs.name = body.name;
   }
   serialize(attrs);
+  const stops = route.operation === 'contacts.unsubscribe' ? [body.scope] : Object.entries(body.topics ?? {}).filter(([, status]) => status === 'OPT_OUT').map(([topic]) => topic);
+  for (const scope of stops) await audit('CONTACT_STOP', 'contact', { scope, operation: route.operation === 'contacts.unsubscribe' ? 'UNSUBSCRIBE' : 'UPDATE' }, body.email);
   await updateRecord(runtime, 'CONTACT_META', metadata.SK, metadata, { attributes: attrs, blocked_all: blockedAll, blocked_topics: [...blocked].sort(), ...(action === 'RECONSENT' ? { registration_state: 'ACTIVE' } : {}) }, action === 'RECONSENT' ? ['pending_attributes'] : []);
-  await audit(action, 'contact', { before, topics: Object.fromEntries(preferences), all, attributes: attrs, reason: body.note ?? '利用者の購読変更操作' }, body.email);
+  if (action !== 'CONTACT_STOP') await audit(action, 'contact', { before, topics: Object.fromEntries(preferences), all, attributes: attrs, reason: body.note ?? '利用者の購読変更操作' }, body.email);
   return { email_masked: maskEmail(body.email), topics: Object.fromEntries(preferences), unsubscribe_all: all };
 }
 
@@ -160,14 +164,20 @@ async function erase({ runtime, body, audit, requestId }) {
   try {
     // 先にHMACを記録する。SES削除の結果が不明でも再登録を許可しない。
     const hash = await eraseMatch(runtime, body.email);
+    // 途中で失敗しても、復元で削除の指示を失わないよう先に保管経路へ渡す。
+    await audit('ERASE', 'contact', { note: body.note, erase_mac: hash, scope: 'ALL', operation: 'ERASE' }, body.email);
     const existing = await runtime.store.get('ERASED', hash);
     if (!existing) {
-      try { await runtime.store.put({ PK: 'ERASED', SK: hash, erased_at: timestamp(runtime) }); } catch (error) { if (error.name !== 'ConditionalCheckFailedException') throw error; }
+      try { await runtime.store.put({ PK: 'ERASED', SK: hash, addr_id: addressHash(body.email, runtime.hmacKey), erased_at: timestamp(runtime) }); } catch (error) { if (error.name !== 'ConditionalCheckFailedException') throw error; }
     }
     await eraseContactMetadata(runtime, body.email);
     try { await runtime.ses.deleteContact({ ContactListName: runtime.contactList, EmailAddress: body.email }); } catch (error) { if (error.name !== 'NotFoundException') throw error; }
-    await audit('ERASE', 'contact', { note: body.note, erase_mac: hash }, body.email);
-    return { erased: true };
+    await deleteDeliveryIndex(runtime, addressHash(body.email, runtime.hmacKey));
+    try {
+      const response = await runtime.lambda.invoke({ FunctionName: runtime.workerFunctionArn, InvocationType: 'Event', Payload: Buffer.from(JSON.stringify({ mode: 'erase-suppression', email: body.email, erase_mac: hash })) });
+      if (response.StatusCode !== 202) throw new Error('Suppression deletion was not accepted');
+    } catch (error) { await runtime.notify('ERASE_SUPPRESSION_FAILED', 'contact'); throw error; }
+    return { erased: true, suppression: 'REQUESTED', retention: { imports_days: 7, snapshots_days: 30, backups_days: 90, event_logs_days: 90, max_days: 90 } };
   } finally { await runtime.contactLock.change(owner, {}, true); }
 }
 

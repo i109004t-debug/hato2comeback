@@ -2,10 +2,10 @@ import { readFile } from 'node:fs/promises';
 
 export const AWS_APIS = Object.freeze({
   kms: { package: 'kms', client: 'KMSClient', operations: ['GenerateMac', 'DescribeKey'] },
-  ses: { package: 'sesv2', client: 'SESv2Client', operations: ['GetAccount', 'GetEmailIdentity', 'GetConfigurationSet', 'GetConfigurationSetEventDestinations', 'GetContactList', 'ListContacts', 'GetContact', 'CreateContact', 'UpdateContact', 'DeleteContact', 'GetSuppressedDestination', 'CreateImportJob', 'GetImportJob', 'CreateEmailTemplate', 'GetEmailTemplate', 'TestRenderEmailTemplate', 'DeleteEmailTemplate', 'SendEmail'] },
-  ddb: { package: 'dynamodb', client: 'DynamoDBClient', operations: ['GetItem', 'PutItem', 'UpdateItem', 'DeleteItem', 'Query', 'TransactWriteItems', 'BatchGetItem'] },
-  s3: { package: 's3', client: 'S3Client', operations: ['PutObject', 'GetObject', 'HeadObject', 'DeleteObject'] },
-  sfn: { package: 'sfn', client: 'SFNClient', operations: ['StartExecution', 'DescribeExecution', 'SendTaskSuccess', 'SendTaskFailure'] },
+  ses: { package: 'sesv2', client: 'SESv2Client', operations: ['GetAccount', 'GetEmailIdentity', 'GetConfigurationSet', 'GetConfigurationSetEventDestinations', 'GetContactList', 'ListContacts', 'GetContact', 'CreateContact', 'UpdateContact', 'DeleteContact', 'GetSuppressedDestination', 'DeleteSuppressedDestination', 'CreateImportJob', 'GetImportJob', 'CreateEmailTemplate', 'GetEmailTemplate', 'TestRenderEmailTemplate', 'DeleteEmailTemplate', 'SendEmail'] },
+  ddb: { package: 'dynamodb', client: 'DynamoDBClient', operations: ['GetItem', 'PutItem', 'UpdateItem', 'DeleteItem', 'Query', 'Scan', 'TransactWriteItems', 'BatchGetItem'] },
+  s3: { package: 's3', client: 'S3Client', operations: ['PutObject', 'GetObject', 'HeadObject', 'DeleteObject', 'ListObjectsV2'] },
+  sfn: { package: 'sfn', client: 'SFNClient', operations: ['StartExecution', 'DescribeExecution', 'ListExecutions', 'SendTaskSuccess', 'SendTaskFailure'] },
   scheduler: { package: 'scheduler', client: 'SchedulerClient', operations: ['CreateSchedule', 'DeleteSchedule', 'GetSchedule'] },
   cognito: { package: 'cognito-identity-provider', client: 'CognitoIdentityProviderClient', operations: ['AdminGetUser', 'AdminListGroupsForUser', 'ListUsersInGroup', 'AdminCreateUser', 'AdminAddUserToGroup', 'AdminRemoveUserFromGroup', 'AdminDisableUser', 'AdminEnableUser', 'AdminUserGlobalSignOut', 'AdminSetUserMFAPreference', 'AdminResetUserPassword'] },
   cloudwatch: { package: 'cloudwatch', client: 'CloudWatchClient', operations: ['GetMetricData', 'DescribeAlarms'] },

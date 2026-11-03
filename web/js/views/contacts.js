@@ -175,7 +175,7 @@ export async function mount(ctx) {
       if (values.operation === 'erase' && !await confirmDialog('この宛先の個人情報を完全削除します。以後、このアドレスは登録・取込できません。')) return;
       if (values.operation === 'unsubscribe-all' && !await confirmDialog('この会員への配信をすべて停止します。購読の再開には管理者による新しい同意の証跡が必要です。')) return;
       await ctx.api.request(input.path, { method: 'POST', body: input.body });
-      showMessage(root, '操作を受け付けました。');
+      showMessage(root, values.operation === 'erase' ? '連絡先・画面の属性・配送記録の索引を削除しました。SESの抑止リストの削除は非同期で進みます（数分以内）。アドレスを含む取込ファイルは最長7日、宛先スナップショットは配信終了・調査終了時または最長30日、バックアップと生の配送記録は最長90日で消えます。再登録を防ぐ照合値と停止の印は残ります。' : '操作を受け付けました。');
       if (values.operation === 'erase') q('[data-contact-detail]').hidden = true;
       else await detail(input.body.email);
       await list();
