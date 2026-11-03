@@ -18,7 +18,7 @@ export async function importContacts(event, runtime) {
     const topics = (definition.Topics ?? []).map((topic) => topic.TopicName);
     const parsed = validateImportCsv(source, { topics, importId: record.import_id, now: runtime.now });
     const secret = await runtime.secrets.get('erase-hmac');
-    const hmacKey = Buffer.from(secret.key, 'base64');
+    const hmacKey = secret.key;
     // 完全削除との競合も避けるため、HMAC照合の直前から排他を保持する。
     await runtime.contactLock.acquire(record.import_id);
     acquired = true;

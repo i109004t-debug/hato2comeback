@@ -33,7 +33,7 @@ export function managementFixture(options = {}) {
   });
   Object.assign(f.deps, {
     clientId: 'web', userPoolId: 'pool', stateMachineArn: 'arn:aws:states:ap-northeast-1:123456789012:stateMachine:postline', scheduleGroup: 'postline-stg', schedulerRoleArn: 'arn:aws:iam::123456789012:role/scheduler', workerFunctionArn: 'worker',
-    secretsProvider: { get: async (name) => name === 'origin-verify' ? { current: 'origin', previous: 'old-origin' } : { key: Buffer.alloc(32, 7).toString('base64') } },
+    secretsProvider: { get: async (name) => name === 'origin-verify' ? { current: 'origin', previous: 'old-origin' } : { key: '7'.repeat(64) } },
     cognito: {
       adminGetUser: async () => { f.cognitoCalls += 1; return { Enabled: f.enabled, UserStatus: 'CONFIRMED', UserAttributes: [{ Name: 'sub', Value: f.sub }, { Name: 'name', Value: '運営者' }] }; },
       adminListGroupsForUser: async () => ({ Groups: (Array.isArray(f.role) ? f.role : [f.role]).map((GroupName) => ({ GroupName })) }),

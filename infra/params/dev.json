@@ -17,15 +17,15 @@
   },
   {
     "ParameterKey": "HostedZoneId",
-    "ParameterValue": "ZEXAMPLE000000"
+    "ParameterValue": "ZEXAMPLEDEV000000"
   },
   {
     "ParameterKey": "CertificateArn",
-    "ParameterValue": "arn:aws:acm:us-east-1:111111111111:certificate/example-certificate"
+    "ParameterValue": "REPLACE_WITH_EDGE_CERTIFICATE_ARN"
   },
   {
     "ParameterKey": "WebAclArn",
-    "ParameterValue": "arn:aws:wafv2:us-east-1:111111111111:global/webacl/example/example-id"
+    "ParameterValue": "REPLACE_WITH_EDGE_WEB_ACL_ARN"
   },
   {
     "ParameterKey": "CognitoDomainPrefix",
@@ -34,10 +34,6 @@
   {
     "ParameterKey": "AlertEmail",
     "ParameterValue": "postline-dev@example.jp"
-  },
-  {
-    "ParameterKey": "EraseHmacKey",
-    "ParameterValue": "ZXhhbXBsZS1rZXktcmVwbGFjZS1iZWZvcmUtdXNlMDA="
   },
   {
     "ParameterKey": "OriginSecretStage",
@@ -66,5 +62,9 @@
   {
     "ParameterKey": "Topic2Description",
     "ParameterValue": "イベントやチケット先行受付のお知らせ"
+  },
+  {
+    "ParameterKey": "WorkerReservedConcurrency",
+    "ParameterValue": "-1"
   }
 ]

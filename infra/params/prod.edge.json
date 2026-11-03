@@ -1,0 +1,18 @@
+[
+  {
+    "ParameterKey": "Env",
+    "ParameterValue": "prod"
+  },
+  {
+    "ParameterKey": "ExpectedAccountId",
+    "ParameterValue": "333333333333"
+  },
+  {
+    "ParameterKey": "AppDomain",
+    "ParameterValue": "app.prod.example.jp"
+  },
+  {
+    "ParameterKey": "HostedZoneId",
+    "ParameterValue": "ZEXAMPLEPROD000000"
+  }
+]

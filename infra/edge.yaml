@@ -89,6 +89,10 @@ Resources:
                   TextTransformations: [{Priority: 0, Type: NONE}]
           VisibilityConfig: {CloudWatchMetricsEnabled: true, SampledRequestsEnabled: false, MetricName: ApiRate}
 Outputs:
+  Environment:
+    Value: !Ref Env
+  AccountId:
+    Value: !Ref 'AWS::AccountId'
   CertificateArn:
     Value: !Ref Certificate
   WebAclArn:

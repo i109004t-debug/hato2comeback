@@ -267,7 +267,7 @@ test('T-47 全停止は名前を消し、再同意だけが全停止を解除し
 test('T-17 完全削除はHMACを保持し、Gmail別表記でも再登録を拒否', async () => {
   const f = managementFixture({ env: 'prod' });
   assert.equal((await f.request('POST /contacts/erase', { email: 'T.a+fc@googlemail.com', note: '本人からの削除請求' })).statusCode, 200);
-  const hash = addressHash('ta@gmail.com', Buffer.alloc(32, 7));
+  const hash = addressHash('ta@gmail.com', '7'.repeat(64));
   assert.ok(f.ddb.get('ERASED', hash));
   expectCode(await f.request('POST /contacts', { ...newContact, email: 't.a@gmail.com' }), 409, 'ERASED_ADDRESS');
   assert.equal(f.changes.filter((change) => change.EmailAddress === 'ta@gmail.com').length, 1);

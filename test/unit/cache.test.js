@@ -67,7 +67,7 @@ test('12.7 シークレットは名前ごとに5分キャッシュ・同時取�
   let current = 'current';
   const secrets = createSecrets({ env: 'prod', now: () => time, secrets: { getSecretValue: async (input) => {
     calls += 1;
-    return { SecretString: JSON.stringify(input.SecretId.endsWith('erase-hmac') ? { key: Buffer.alloc(32, 1).toString('base64') } : { current, previous: 'previous' }) };
+    return { SecretString: JSON.stringify(input.SecretId.endsWith('erase-hmac') ? { key: '1'.repeat(64) } : { current, previous: 'previous' }) };
   } } });
   const [a, b] = await Promise.all([secrets.get('origin-verify'), secrets.get('origin-verify')]);
   assert.equal(calls, 1);
@@ -101,4 +101,15 @@ test('シークレットの不正JSON・鍵長を拒否し、期限後の障害�
   text = '{"key":"short"}';
   await assert.rejects(secrets.get('erase-hmac'), { code: 'CONFIGURATION_INVALID' });
   await assert.rejects(secrets.get('unknown'), TypeError);
+});
+
+test('12.7 erase-hmacは32文字以上のUTF-8文字列を復号せず保持する', async () => {
+  for (const key of ['x'.repeat(32), 'a'.repeat(64), '鍵'.repeat(32), 'A'.repeat(43) + '=']) {
+    const provider = createSecrets({ env: 'dev', secrets: { getSecretValue: async () => ({ SecretString: JSON.stringify({ key }) }) } });
+    assert.equal((await provider.get('erase-hmac')).key, key);
+  }
+  for (const key of ['', 'x'.repeat(31), '鍵'.repeat(31), null, 123]) {
+    const provider = createSecrets({ env: 'dev', secrets: { getSecretValue: async () => ({ SecretString: JSON.stringify({ key }) }) } });
+    await assert.rejects(provider.get('erase-hmac'), { code: 'CONFIGURATION_INVALID' });
+  }
 });

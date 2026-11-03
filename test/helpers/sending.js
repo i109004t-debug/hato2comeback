@@ -137,7 +137,7 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
     ddb, config: { get: async () => structuredClone(settings) },
     metrics: { emit: (name, value, dimensions) => metrics.push({ name, value, dimensions }) },
     notify: async (code, id) => notices.push({ code, id }), logger: { error: (...args) => f.logs.push(args) },
-    secretsProvider: { get: async () => ({ key: Buffer.alloc(32, 7).toString('base64') }) },
+    secretsProvider: { get: async () => ({ key: '7'.repeat(64) }) },
     s3: {
       putObject: async (input) => { await f.onPut?.(input); files.set(input.Key, input.Body); return {}; },
       getObject: async (input) => { if (!files.has(input.Key)) throw failure('NoSuchKey', 404); return { Body: files.get(input.Key) }; },

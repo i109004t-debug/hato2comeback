@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 # テスト専用。実際のaws実行ファイルへフォールバックしない。
-aws() {
+mock_aws() {
   printf '%s\n' "$*" >> "$MOCK_CALLS"
   local args="$*"
   case "$1 $2" in
@@ -19,6 +19,10 @@ aws() {
         *StackStatus*) printf '%s\n' "${MOCK_STATUS:-UPDATE_COMPLETE}" ;;
         *"OutputKey=='Environment'"*) printf 'dev\n' ;;
         *"OutputKey=='AccountId'"*) printf '111111111111\n' ;;
+        *"OutputKey=='CertificateArn'"*) printf 'arn:aws:acm:us-east-1:111111111111:certificate/00000000-0000-0000-0000-000000000000\n' ;;
+        *"OutputKey=='WebAclArn'"*) printf 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/postline-dev/00000000-0000-0000-0000-000000000000\n' ;;
+        *"OutputKey=='WebBucketName'"*) printf 'example-web\n' ;;
+        *"OutputKey=='DistributionId'"*) printf 'EXAMPLEDIST\n' ;;
         *"OutputKey=='AuthDomain'"*) printf 'https://postline-example-dev.auth.ap-northeast-1.amazoncognito.com\n' ;;
         *"OutputKey=='WebClientId'"*) printf 'exampleclient123\n' ;;
         *"OutputKey=='UserPoolId'"*) printf 'ap-northeast-1_example\n' ;;
@@ -37,7 +41,16 @@ aws() {
         *) printf 'reviewed\n' ;;
       esac ;;
     'sesv2 get-contact-list') printf 'kaiho\tevent\n' ;;
-    'ssm get-parameter') printf '{"sending_enabled":%s}\n' "${MOCK_SENDING:-false}" ;;
+    'ssm get-parameter')
+      case "${MOCK_CONFIG:-exists}" in
+        missing) printf 'An error occurred (ParameterNotFound) when calling GetParameter\n' >&2; return 254 ;;
+        denied) printf 'An error occurred (AccessDeniedException)\n' >&2; return 254 ;;
+        network) printf 'Could not connect\n' >&2; return 255 ;;
+      esac
+      printf '{"sending_enabled":%s}\n' "${MOCK_SENDING:-false}" ;;
+    'ssm put-parameter') [[ ${MOCK_CONFIG_RACE:-0} == 0 ]] || return 254 ;;
+    'cloudfront create-invalidation') printf 'EXAMPLEINVALIDATION\n' ;;
+    'cloudfront wait') ;;
     'lambda get-function-concurrency') printf '%s\n' "${MOCK_CONCURRENCY:-0}" ;;
     'lambda put-function-concurrency'|'lambda delete-function-concurrency') ;;
     'dynamodb get-item') printf '%s\n' "${MOCK_OWNER:-restore:dev}" ;;
@@ -45,8 +58,24 @@ aws() {
     's3api head-object') printf '123\n' ;;
     'sesv2 create-import-job') printf '{"JobId":"example-job"}\n' ;;
     'sesv2 get-import-job') printf '%s\n' "${MOCK_JOB_STATUS:-COMPLETED}" ;;
-    'sesv2 get-contact') printf 'False\n' ;;
+    'sesv2 get-contact')
+      [[ ${MOCK_CONTACT_ERROR:-0} == 0 ]] || return 254
+      if [[ ${MOCK_CONTACT_NO_ATTR:-0} == 1 ]]; then
+        printf '{"ContactListName":"postline","EmailAddress":"member@example.jp","TopicPreferences":[]}\n'
+      else
+        printf '%s\n' '{"ContactListName":"postline","EmailAddress":"member@example.jp","TopicPreferences":[{"TopicName":"kaiho","SubscriptionStatus":"OPT_OUT"},{"TopicName":"event","SubscriptionStatus":"OPT_IN"}],"AttributesData":"{\"name\":\"会員\",\"consent\":{\"source\":\"入会\"}}"}'
+      fi ;;
     'sesv2 update-contact') ;;
     *) printf 'Unexpected mock AWS call: %s\n' "$args" >&2; return 99 ;;
   esac
+}
+aws() {
+  [[ ${AWS_CLI_FILE_ENCODING:-} == UTF-8 ]] || { printf 'UTF-8 setting missing\n' >&2; return 99; }
+  local value line
+  value=$(mock_aws "$@") || return $?
+  if [[ ${MOCK_CRLF:-0} == 1 ]]; then
+    while IFS= read -r line; do printf '%s\r\n' "$line"; done <<< "$value"
+  else
+    printf '%s\n' "$value"
+  fi
 }

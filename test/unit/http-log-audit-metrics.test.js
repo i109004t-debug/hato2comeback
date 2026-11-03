@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { AppError, ERROR_STATUS, jsonResponse, errorResponse, parseJsonBody, readBody, assertOrigin, accessClaims, assertRequestUrl } from '../../src/common/http.js';
 import { createLogger, redact, addr8, addressHash } from '../../src/common/log.js';
 import { createAuditItem, createAudit } from '../../src/common/audit.js';
@@ -75,7 +76,8 @@ test('13.1 ログは1行JSON・必須項目・入れ子の機密キー・例外�
     err: new Error('SES returned member@example.com'),
   });
   assert.equal(lines.length, 1);
-  assert.equal(lines[0].split('\n').length, 1);
+  assert.equal(lines[0].split('\n').length, 2);
+  assert.ok(lines[0].endsWith('\n'));
   const entry = JSON.parse(lines[0]);
   assert.equal(entry.ts, '1970-01-01T00:00:00.000Z');
   assert.equal(entry.level, 'info');
@@ -130,9 +132,30 @@ test('13.2 全アプリメトリクスをEMFで出力し、機密情報を次元
     assert.equal(entry[name], 1);
   }
   assert.equal(lines.length, Object.keys(METRIC_UNITS).length);
+  for (const line of lines) {
+    assert.ok(line.endsWith('\n'));
+    assert.ok(Object.hasOwn(JSON.parse(line), '_aws'));
+  }
   assert.throws(() => metrics.emit('UnknownMetric', 1));
   assert.throws(() => metrics.emit('Accepted', NaN));
   assert.throws(() => metrics.emit('Paused', 1, { Reason: 'member@example.com' }));
   assert.throws(() => metrics.emit('ApiLatencyMs', 1, { Route: '/contacts/member@example.com' }));
   assert.throws(() => metrics.emit('Accepted', 1, { email: 'member@example.com' }));
+});
+
+test('13.1〜13.2 既定出力はconsoleのJSON包絡を通さずstdoutへ1行ずつ書く', () => {
+  const result = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { createMetrics } from ${JSON.stringify(new URL('../../src/common/metrics.js', import.meta.url).href)};
+    import { createLogger } from ${JSON.stringify(new URL('../../src/common/log.js', import.meta.url).href)};
+    console.log = () => { throw new Error('console.log must not be used'); };
+    createMetrics({ env: 'dev', now: () => 0 }).emit('NeedsReview');
+    createLogger({ fn: 'api', now: () => 0 }).info('member@example.com');
+  `], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const lines = result.stdout.trimEnd().split('\n').map((line) => JSON.parse(line));
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0]._aws.CloudWatchMetrics[0].Namespace, 'Postline/dev');
+  assert.equal(lines[0].message, undefined);
+  assert.equal(lines[1].level, 'info');
+  assert.equal(lines[1].msg, '[REDACTED_EMAIL]');
 });

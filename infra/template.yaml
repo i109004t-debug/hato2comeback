@@ -26,11 +26,12 @@ Parameters:
     AllowedPattern: '[a-z0-9-]{1,63}'
   AlertEmail:
     Type: String
-  EraseHmacKey:
-    Type: String
-    NoEcho: true
-    AllowedPattern: '[A-Za-z0-9+/]{42}[AEIMQUYcgkosw048]='
-    Description: Immutable base64 encoded 32-byte key; supply securely, never rotate
+  WorkerReservedConcurrency:
+    Type: Number
+    Default: -1
+    MinValue: -1
+    MaxValue: 1000
+    Description: -1 omits reserved concurrency; check account quota before reserving
   OriginSecretStage:
     Type: String
     Default: AWSCURRENT
@@ -67,12 +68,13 @@ Rules:
       - Assert: !Not [!Equals [!Ref Topic1Name, !Ref Topic2Name]]
         AssertDescription: Topic names must be unique
 Conditions:
+  HasWorkerReservedConcurrency: !Not [!Equals [!Ref WorkerReservedConcurrency, '-1']]
   IsProd: !Equals [!Ref Env, prod]
   HasTopic2: !Not [!Equals [!Ref Topic2Name, '']]
 Resources:
   WebBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
@@ -80,7 +82,7 @@ Resources:
       VersioningConfiguration: {Status: Enabled}
   DataBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
@@ -97,7 +99,7 @@ Resources:
           - {Id: Multipart, Status: Enabled, AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}}
   EventLogBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       PublicAccessBlockConfiguration: {BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true}
@@ -140,7 +142,7 @@ Resources:
             Condition: {Bool: {'aws:SecureTransport': 'false'}}
   Table:
     Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       TableName: !Sub 'postline-${Env}'
@@ -170,7 +172,7 @@ Resources:
         BehaviorOnMxFailure: REJECT_MESSAGE
   ContactList:
     Type: AWS::SES::ContactList
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       ContactListName: postline
@@ -297,7 +299,7 @@ Resources:
             - {Name: bounce, Type: 'struct<timestamp:string,feedbackid:string,bouncetype:string,bouncesubtype:string,bouncedrecipients:array<struct<emailaddress:string,action:string,status:string,diagnosticcode:string>>>'}
             - {Name: complaint, Type: 'struct<timestamp:string,feedbackid:string,complaintfeedbacktype:string,complainedrecipients:array<struct<emailaddress:string>>>'}
             - {Name: deliverydelay, Type: 'struct<timestamp:string,delaytype:string,expirationtime:string,delayedrecipients:array<struct<emailaddress:string,status:string,diagnosticcode:string>>>'}
-            - {Name: subscription, Type: 'struct<timestamp:string,contactlist:string,source:string,newtopicpreferences:struct<unsubscribeall:boolean,topicpreferences:array<struct<topicname:string,subscriptionstatus:string>>>,oldtopicpreferences:struct<unsubscribeall:boolean,topicpreferences:array<struct<topicname:string,subscriptionstatus:string>>>>'}
+            - {Name: subscription, Type: 'struct<timestamp:string,contactlist:string,source:string,newtopicpreferences:struct<unsubscribeall:boolean,topicsubscriptionstatus:array<struct<topicname:string,subscriptionstatus:string>>,topicdefaultsubscriptionstatus:array<struct<topicname:string,subscriptionstatus:string>>>,oldtopicpreferences:struct<unsubscribeall:boolean,topicsubscriptionstatus:array<struct<topicname:string,subscriptionstatus:string>>,topicdefaultsubscriptionstatus:array<struct<topicname:string,subscriptionstatus:string>>>>'}
             - {Name: reject, Type: 'struct<reason:string>'}
             - {Name: failure, Type: 'struct<errormessage:string,templatename:string>'}
   AthenaWorkGroup:
@@ -313,7 +315,7 @@ Resources:
           EncryptionConfiguration: {EncryptionOption: SSE_S3}
   UserPool:
     Type: AWS::Cognito::UserPool
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       UserPoolName: !Sub 'postline-${Env}'
@@ -378,21 +380,9 @@ Resources:
   ViewerGroup:
     Type: AWS::Cognito::UserPoolGroup
     Properties: {UserPoolId: !Ref UserPool, GroupName: viewer}
-  ConfigParameter:
-    Type: AWS::SSM::Parameter
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      Name: !Sub '/postline/${Env}/config'
-      Type: String
-      Value:
-        Fn::Sub:
-          - |
-            {"sending_enabled":false,"max_rate_per_sec":10,"ses_rate_safety_factor":0.8,"batch_size":200,"progress_every":20,"max_recipients_per_campaign":100000,"lock_ttl_seconds":7200,"pause_timeout_days":7,"reputation_alarms":["postline-${Env}-ses-bounce-rate","postline-${Env}-ses-complaint-rate"],"campaign_bounce_pause_ratio":0.05,"campaign_min_sample":200,"campaign_delay_pause_ratio":0.10,"daily_send_cap":1000,"delivery_check_required":${IsProduction},"nonprod_allowlist":[],"health_check_seconds":60,"auth_status_max_age_hours":26,"delivery_check_max_age_days":90,"max_pending_days":7,"event_log_stale_seconds":900}
-          - IsProduction: !If [IsProd, 'true', 'false']
   OriginSecret:
     Type: AWS::SecretsManager::Secret
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub '/postline/${Env}/origin-verify'
@@ -403,11 +393,15 @@ Resources:
         ExcludePunctuation: true
   EraseSecret:
     Type: AWS::SecretsManager::Secret
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       Name: !Sub '/postline/${Env}/erase-hmac'
-      SecretString: !Sub '{"key":"${EraseHmacKey}"}'
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: key
+        PasswordLength: 64
+        ExcludePunctuation: true
   ApiLogGroup:
     Type: AWS::Logs::LogGroup
     Properties: {LogGroupName: !Sub '/aws/lambda/postline-${Env}-api', RetentionInDays: 365}
@@ -450,7 +444,7 @@ Resources:
       Runtime: nodejs24.x
       Architectures: [arm64]
       Handler: src/api/handler.handler
-      Code: ../build/backend.zip
+      Code: ../build/backend/
       Role: !GetAtt ApiRole.Arn
       MemorySize: 256
       Timeout: 29
@@ -471,7 +465,7 @@ Resources:
           SCHEDULE_GROUP: !Ref ScheduleGroup
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
           WORKER_FUNCTION_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
-          CONFIG_PARAM: !Ref ConfigParameter
+          CONFIG_PARAM: !Sub '/postline/${Env}/config'
           ORIGIN_SECRET_ARN: !Ref OriginSecret
           ERASE_SECRET_ARN: !Ref EraseSecret
           LOG_LEVEL: INFO
@@ -483,11 +477,11 @@ Resources:
       Runtime: nodejs24.x
       Architectures: [arm64]
       Handler: src/worker/handler.handler
-      Code: ../build/backend.zip
+      Code: ../build/backend/
       Role: !GetAtt WorkerRole.Arn
       MemorySize: 512
       Timeout: 900
-      ReservedConcurrentExecutions: 3
+      ReservedConcurrentExecutions: !If [HasWorkerReservedConcurrency, !Ref WorkerReservedConcurrency, !Ref 'AWS::NoValue']
       LoggingConfig: {LogFormat: JSON, LogGroup: !Ref WorkerLogGroup}
       Environment:
         Variables:
@@ -505,7 +499,7 @@ Resources:
           SCHEDULE_GROUP: !Ref ScheduleGroup
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
           WORKER_FUNCTION_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
-          CONFIG_PARAM: !Ref ConfigParameter
+          CONFIG_PARAM: !Sub '/postline/${Env}/config'
           ORIGIN_SECRET_ARN: !Ref OriginSecret
           ERASE_SECRET_ARN: !Ref EraseSecret
           LOG_LEVEL: INFO
@@ -751,12 +745,17 @@ Resources:
             Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
           - Effect: Allow
             Action: ['ses:SendEmail']
-            Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
+            Resource: [!If [IsProd, !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*'], !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
             Condition:
               StringLike: {'ses:FromAddress': !Sub '*@${SenderDomain}'}
           - Effect: Allow
             Action: ['cloudwatch:GetMetricData', 'cloudwatch:DescribeAlarms']
             Resource: '*'
+          - Effect: Allow
+            Action: ['s3:ListBucket']
+            Resource: !GetAtt DataBucket.Arn
+            Condition:
+              StringLike: {'s3:prefix': ['imports/report/*', 'results/*', 'recipients/*', 'delivery-checks/*']}
           - Effect: Allow
             Action: ['s3:GetObject']
             Resource: [!Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/delivery-checks/*', !Sub '${DataBucket.Arn}/imports/report/*', !Sub '${DataBucket.Arn}/recipients/*']
@@ -827,7 +826,7 @@ Resources:
             Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
           - Effect: Allow
             Action: ['ses:SendEmail']
-            Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
+            Resource: [!If [IsProd, !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*'], !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
             Condition:
               StringLike: {'ses:FromAddress': !Sub '*@${SenderDomain}'}
           - Effect: Allow
@@ -836,6 +835,11 @@ Resources:
           - Effect: Allow
             Action: ['cloudwatch:GetMetricData', 'cloudwatch:DescribeAlarms']
             Resource: '*'
+          - Effect: Allow
+            Action: ['s3:ListBucket']
+            Resource: !GetAtt DataBucket.Arn
+            Condition:
+              StringLike: {'s3:prefix': ['imports/staging/*', 'imports/ready/*', 'imports/report/*', 'recipients/*', 'results/*', 'backups/contacts/*', 'delivery-checks/*']}
           - Effect: Allow
             Action: ['s3:GetObject']
             Resource: [!Sub '${DataBucket.Arn}/imports/*', !Sub '${DataBucket.Arn}/recipients/*', !Sub '${DataBucket.Arn}/results/*', !Sub '${DataBucket.Arn}/backups/*', !Sub '${DataBucket.Arn}/delivery-checks/*']
@@ -927,7 +931,7 @@ Resources:
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       TreatMissingData: missing
-      Namespace: !Sub 'Postline-${Env}'
+      Namespace: !Sub 'Postline/${Env}'
       MetricName: NeedsReview
       Statistic: Sum
       Period: 300
@@ -941,7 +945,7 @@ Resources:
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       TreatMissingData: missing
-      Namespace: !Sub 'Postline-${Env}'
+      Namespace: !Sub 'Postline/${Env}'
       MetricName: Unknown
       Statistic: Sum
       Period: 300
@@ -955,7 +959,7 @@ Resources:
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       TreatMissingData: missing
-      Namespace: !Sub 'Postline-${Env}'
+      Namespace: !Sub 'Postline/${Env}'
       MetricName: SesBusy
       Statistic: Sum
       Period: 300
@@ -1336,7 +1340,7 @@ Outputs:
   AlertTopicArn:
     Value: !Ref AlertTopic
   ConfigParameterName:
-    Value: !Ref ConfigParameter
+    Value: !Sub '/postline/${Env}/config'
   OriginSecretArn:
     Value: !Ref OriginSecret
   EraseSecretArn:

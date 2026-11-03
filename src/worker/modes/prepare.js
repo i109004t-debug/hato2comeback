@@ -70,7 +70,7 @@ export async function prepare(event, runtime) {
       }
     } while (token);
     const secret = await runtime.secrets.get('erase-hmac');
-    const shuffled = shuffleRecipients(recipients, id, Buffer.from(secret.key, 'base64'));
+    const shuffled = shuffleRecipients(recipients, id, secret.key);
     recipientsTotal = shuffled.length;
     chunksTotal = Math.ceil(recipientsTotal / health.config.batch_size);
     for (let chunk = 0; chunk < chunksTotal; chunk += 1) {

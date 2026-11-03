@@ -6,7 +6,7 @@ function validateSecret(name, value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail();
   if (name === 'origin-verify') {
     if (Object.keys(value).some((key) => !['current', 'previous'].includes(key)) || typeof value.current !== 'string' || !value.current || (value.previous !== undefined && typeof value.previous !== 'string')) fail();
-  } else if (Object.keys(value).length !== 1 || typeof value.key !== 'string' || Buffer.from(value.key, 'base64').length !== 32 || Buffer.from(value.key, 'base64').toString('base64') !== value.key) fail();
+  } else if (Object.keys(value).length !== 1 || typeof value.key !== 'string' || [...value.key].length < 32) fail();
   return value;
 }
 

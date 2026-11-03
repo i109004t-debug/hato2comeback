@@ -10,7 +10,7 @@ export const METRIC_UNITS = Object.freeze({
 });
 const reasons = ['USER', 'OPERATOR_SWITCH', 'REPUTATION_ALARM', 'CAMPAIGN_BOUNCE', 'CAMPAIGN_DELAY', 'EVENTS_MISSING', 'EVENT_LOG_STALE', 'MONITORING_UNAVAILABLE', 'CONTENT_ERROR', 'AUTH_CHECK', 'SES_PAUSED', 'SES_UNSTABLE', 'QUOTA'];
 
-export function createMetrics({ env, now = defaultNow, write = console.log }) {
+export function createMetrics({ env, now = defaultNow, write = (line) => process.stdout.write(line) }) {
   if (!['dev', 'stg', 'prod'].includes(env)) throw new TypeError('Invalid environment');
   return {
     emit(name, value = 1, dimensions = {}) {
@@ -24,7 +24,7 @@ export function createMetrics({ env, now = defaultNow, write = console.log }) {
         ...dimensions,
         [name]: value,
       };
-      write(JSON.stringify(entry));
+      write(`${JSON.stringify(entry)}\n`);
       return entry;
     },
   };

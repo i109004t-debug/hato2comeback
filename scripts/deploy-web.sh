@@ -16,7 +16,11 @@ printf '{"env":"%s","region":"%s","authDomain":"%s","clientId":"%s","userPoolId"
 [[ ${2:-} != config-only ]] || exit 0
 [[ -f web/index.html && -f web/callback.html ]] || die 'Web application is not present; generated config.json only'
 BUCKET=$(output WebBucketName); DIST=$(output DistributionId)
-aws s3 sync web/ "s3://$BUCKET/" --region "$REGION" --exclude config.json --exclude '*.map' --cache-control 'public,max-age=300'
-aws s3 cp web/config.json "s3://$BUCKET/config.json" --region "$REGION" --content-type application/json --cache-control 'no-cache,no-store,must-revalidate'
-aws cloudfront create-invalidation --region "$REGION" --distribution-id "$DIST" --paths '/*'
-aws cloudfront wait distribution-deployed --region "$REGION" --id "$DIST"
+for spec in 'html:text/html' 'js:application/javascript' 'css:text/css' 'json:application/json'; do
+  extension=${spec%%:*}; content_type=${spec#*:}
+  aws s3 cp web/ "s3://$BUCKET/" --recursive --region "$REGION" --exclude '*' --include "*.$extension" \
+    --content-type "$content_type; charset=utf-8" --cache-control 'no-cache,max-age=0,must-revalidate'
+done
+INVALIDATION=$(aws_text cloudfront create-invalidation --region "$REGION" --distribution-id "$DIST" --paths '/*' --query Invalidation.Id --output text)
+[[ -n $INVALIDATION && $INVALIDATION != None ]] || die 'Missing invalidation ID'
+aws cloudfront wait invalidation-completed --region "$REGION" --distribution-id "$DIST" --id "$INVALIDATION"

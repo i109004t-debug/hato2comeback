@@ -1,0 +1,18 @@
+[
+  {
+    "ParameterKey": "Env",
+    "ParameterValue": "stg"
+  },
+  {
+    "ParameterKey": "ExpectedAccountId",
+    "ParameterValue": "222222222222"
+  },
+  {
+    "ParameterKey": "AppDomain",
+    "ParameterValue": "app.stg.example.jp"
+  },
+  {
+    "ParameterKey": "HostedZoneId",
+    "ParameterValue": "ZEXAMPLESTG000000"
+  }
+]

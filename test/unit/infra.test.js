@@ -26,7 +26,7 @@ test('12.1 主スタックとエッジに全必須リソースがある', () => 
     BroadcastStateMachine: 'StepFunctions::StateMachine', Table: 'DynamoDB::Table', EmailIdentity: 'SES::EmailIdentity',
     ConfigurationSet: 'SES::ConfigurationSet', ContactList: 'SES::ContactList', EventStream: 'KinesisFirehose::DeliveryStream',
     EventsDatabase: 'Glue::Database', EventsTable: 'Glue::Table', AthenaWorkGroup: 'Athena::WorkGroup',
-    ScheduleGroup: 'Scheduler::ScheduleGroup', DailySchedule: 'Scheduler::Schedule', ConfigParameter: 'SSM::Parameter',
+    ScheduleGroup: 'Scheduler::ScheduleGroup', DailySchedule: 'Scheduler::Schedule',
     OriginSecret: 'SecretsManager::Secret', EraseSecret: 'SecretsManager::Secret', AlertTopic: 'SNS::Topic', AppRecord: 'Route53::RecordSet',
   };
   for (const [name, type] of Object.entries(expected)) assert.ok(resources[name]?.includes(`Type: AWS::${type}\n`), name);
@@ -48,7 +48,7 @@ test('3.1〜3.4 SES認証・TLS・2発行先・Retain・OPT_OUTとDNS出力', ()
   assert.match(resources.ConfigurationSet, /TlsPolicy: REQUIRE/);
   assert.match(resources.ConfigurationSet, /ReputationMetricsEnabled: true/);
   assert.doesNotMatch(resources.ConfigurationSet, /SuppressionOptions|TrackingOptions/);
-  assert.match(resources.ContactList, /DeletionPolicy: Retain\n    UpdateReplacePolicy: Retain/);
+  assert.match(resources.ContactList, /DeletionPolicy: RetainExceptOnCreate\n    UpdateReplacePolicy: Retain/);
   assert.equal((resources.ContactList.match(/DefaultSubscriptionStatus: OPT_OUT/g) ?? []).length, 2);
   for (const name of ['CloudWatchDestination', 'FirehoseDestination']) {
     assert.match(resources[name], /Enabled: true/);
@@ -162,7 +162,7 @@ const iamOperation = (service, operation) => service === 's3' && operation === '
 
 for (const [name, operations] of [['Api',apiOperations],['Worker',workerOperations]]) {
   test(`12.6 ${name} IAMの許可操作を設計表とaws.jsの全操作へ照合（過不足なし）`, () => {
-    const expected = new Set(['logs:CreateLogStream','logs:PutLogEvents', ...(name === 'Api' ? ['iam:PassRole'] : [])]);
+    const expected = new Set(['logs:CreateLogStream','logs:PutLogEvents','s3:ListBucket', ...(name === 'Api' ? ['iam:PassRole'] : [])]);
     for (const [service, list] of Object.entries(operations)) for (const operation of list.split(' ')) {
       assert.ok(AWS_APIS[service].operations.includes(operation), `${service}.${operation}`);
       expected.add(`${prefixes[service]}:${iamOperation(service, operation)}`);
@@ -185,12 +185,12 @@ test('12.6 共通拒否・固定テンプレート・監査ログの拒否とSen
     assert.match(p, /Sid: DenyAuditMutation\n\s+Effect: Deny/);
     assert.match(p, /ForAnyValue:StringLike.*dynamodb:LeadingKeys.*AUDIT#\*/);
     assert.match(p, /Sid: DenyFixedTemplateMutation\n\s+Effect: Deny/);
-    assert.match(p, /Action: \['ses:SendEmail'\]\n\s+Resource: \[!Sub '.*identity\/\$\{SenderDomain\}'.*configuration-set\/postline-\$\{Env\}.*contact-list\/postline.*template\/pl-c-\*/);
+    assert.match(p, /Action: \['ses:SendEmail'\]\n\s+Resource: \[!If \[IsProd, !Sub '.*identity\/\$\{SenderDomain\}'.*configuration-set\/postline-\$\{Env\}.*contact-list\/postline.*template\/pl-c-\*/);
     assert.match(p, /ses:FromAddress/);
   }
   assert.match(resources.ApiPolicy, /Action: \['ses:UpdateEmailTemplate', 'ses:DeleteEmailTemplate'\]/);
   assert.match(resources.WorkerPolicy, /Action: \['ses:DeleteEmailTemplate'\]\n\s+Resource:.*template\/pl-c-\*/);
-  assert.doesNotMatch(resources.ApiPolicy + resources.WorkerPolicy, /s3:ListBucket/);
+  for (const name of ['ApiPolicy', 'WorkerPolicy']) assert.match(resources[name], /identity\/\*'\]/);
 });
 
 test('12.6 引継ぎの限定S3読取・PassRole・通知と環境変数を実装に照合', () => {
@@ -210,25 +210,31 @@ test('12.6 引継ぎの限定S3読取・PassRole・通知と環境変数を実�
     assert.match(resources[fn], /Architectures: \[arm64\]/);
     assert.doesNotMatch(resources[fn], /VpcConfig/);
   }
-  assert.match(resources.WorkerFunction, /ReservedConcurrentExecutions: 3/);
+  assert.match(resources.WorkerFunction, /ReservedConcurrentExecutions: !If \[HasWorkerReservedConcurrency, !Ref WorkerReservedConcurrency, !Ref 'AWS::NoValue'\]/);
+  assert.match(blocks(main, 'Parameters').WorkerReservedConcurrency, /Default: -1/);
 });
 
 test('12.7 初期設定は送信無効、SSMの全設定キーを実装の検証器で検査', () => {
-  const source = /\{"sending_enabled":.+\}/.exec(resources.ConfigParameter)[0];
+  const source = /\{"sending_enabled":.+\}/.exec(read('scripts/bootstrap-config.sh'))[0];
   for (const env of ['dev','stg','prod']) {
-    const settings = JSON.parse(source.replaceAll('${Env}',env).replace('${IsProduction}',String(env === 'prod')));
+    const settings = JSON.parse(source.replaceAll('${ENV}',env).replace('${IsProduction}',String(env === 'prod')));
     assert.deepEqual(Object.keys(settings).sort(), Object.keys(configDefaults(env)).sort());
     validateConfig(settings,env);
     assert.equal(settings.sending_enabled,false);
     assert.equal(settings.delivery_check_required,env === 'prod');
   }
   assert.match(resources.EraseSecret, /DeletionPolicy: Retain/);
-  assert.match(blocks(main,'Parameters').EraseHmacKey, /NoEcho: true/);
+  assert.equal(blocks(main, 'Parameters').EraseHmacKey, undefined);
+  assert.equal(resources.ConfigParameter, undefined);
+  assert.match(resources.EraseSecret, /GenerateStringKey: key\n        PasswordLength: 64\n        ExcludePunctuation: true/);
+  assert.doesNotMatch(resources.EraseSecret, /\n      SecretString:/);
+  assert.match(outputs.ConfigParameterName, /!Sub '\/postline\/\$\{Env\}\/config'/);
 });
 
 test('12.8 環境別アカウント例・リージョン固定・全パラメータの定義一致', () => {
   const params = blocks(main,'Parameters');
   const accounts = new Set();
+  const zones = new Set();
   for (const env of ['dev','stg','prod']) {
     const entries = JSON.parse(read(`infra/params/${env}.json`));
     assert.deepEqual(entries.map((p) => p.ParameterKey).sort(), Object.keys(params).sort());
@@ -237,10 +243,20 @@ test('12.8 環境別アカウント例・リージョン固定・全パラメー
     assert.equal(values.Topic1Display,'会報');
     assert.equal(values.Topic2Display,'イベント・チケット情報');
     assert.ok(values.AppDomain.includes('example') && values.SenderDomain.includes('example'));
-    assert.equal(Buffer.from(values.EraseHmacKey,'base64').length,32);
+    assert.equal(values.EraseHmacKey, undefined);
+    assert.equal(values.WorkerReservedConcurrency, '-1');
+    zones.add(values.HostedZoneId);
+    for (const key of ['CertificateArn', 'WebAclArn']) {
+      const pattern = /AllowedPattern: '([^']+)'/.exec(params[key])[1];
+      assert.equal(new RegExp('^' + pattern + '$').test(values[key]), false);
+    }
+    const edgeParams = JSON.parse(read(`infra/params/${env}.edge.json`));
+    assert.deepEqual(edgeParams.map((p) => p.ParameterKey).sort(), Object.keys(blocks(edge, 'Parameters')).sort());
+    for (const entry of edgeParams) assert.equal(entry.ParameterValue, values[entry.ParameterKey]);
     accounts.add(values.ExpectedAccountId);
   }
   assert.equal(accounts.size,3);
+  assert.equal(zones.size,3);
   assert.match(main, /!Ref 'AWS::Region', ap-northeast-1/);
   assert.match(edge, /!Ref 'AWS::Region', us-east-1/);
   assert.match(main, /!Ref 'AWS::AccountId', !Ref ExpectedAccountId/);
@@ -265,10 +281,19 @@ function runScript(script, args = [], env = {}, input = '') {
   writeFileSync(callsPath,'');
   const result = spawnSync(bash, ['-c', 'source test/helpers/infra-aws.sh; source "scripts/$1" "${@:2}"', 'infra-test',script,...args], {
     cwd:root, encoding:'utf8', input,
-    env:{...process.env,POSTLINE_ACCOUNT_ID:'111111111111',ARTIFACT_BUCKET:'example-artifacts',MOCK_CALLS:'build/infra-mock-calls.txt',...env},
+    env:{...process.env,POSTLINE_ACCOUNT_ID:'111111111111',ARTIFACT_BUCKET:'example-artifacts',POSTLINE_PARAMS:'infra/params/dev.json',POSTLINE_EDGE_PARAMS:'infra/params/dev.edge.json',MOCK_CALLS:'build/infra-mock-calls.txt',...env},
   });
   assert.ifError(result.error);
   return {...result,calls:readFileSync(callsPath,'utf8')};
+}
+
+function preserveWebConfig(t) {
+  const path = new URL('web/config.json', root);
+  const previous = existsSync(path) ? readFileSync(path) : undefined;
+  t.after(() => {
+    if (previous) writeFileSync(path, previous);
+    else rmSync(path, { force: true });
+  });
 }
 
 test('15.3 全スクリプトはstrict bashで、AWS CLI以外の実行環境・外部パッケージ不要', () => {
@@ -282,35 +307,17 @@ test('15.3 全スクリプトはstrict bashで、AWS CLI以外の実行環境・
   }
 });
 
-test('15.3 bashパッケージのZIPを全ファイル・バイト列・CRC32・中央ディレクトリまで確認', () => {
-  const result=spawnSync(bash,['scripts/package.sh'],{cwd:root,encoding:'utf8'});
+test('15.3 packageは最新のsrcとpackage.jsonだけをbackendへそろえる', () => {
+  mkdirSync(new URL('build/backend/src/', root), { recursive: true });
+  writeFileSync(new URL('build/backend/src/stale.js', root), 'stale');
+  const result = spawnSync(bash, ['scripts/package.sh'], { cwd: root, encoding: 'utf8' });
   assert.ifError(result.error);
-  assert.equal(result.status,0,result.stderr);
-  const zip=readFileSync(new URL('build/backend.zip',root));
-  let offset=0; const entries=[];
-  while(zip.readUInt32LE(offset) === 0x04034b50) {
-    const size=zip.readUInt32LE(offset+18), length=zip.readUInt16LE(offset+26);
-    const name=zip.subarray(offset+30,offset+30+length).toString();
-    const body=zip.subarray(offset+30+length,offset+30+length+size);
-    assert.deepEqual(body,readFileSync(new URL(name,root)),name);
-    let crc=0xffffffff;
-    for(const byte of body) { crc^=byte; for(let i=0;i<8;i++) crc=(crc>>>1)^((crc&1)?0xedb88320:0); }
-    assert.equal(zip.readUInt32LE(offset+14),(crc^0xffffffff)>>>0,name);
-    entries.push({name,offset}); offset+=30+length+size;
-  }
-  const central=offset;
-  for(const entry of entries) {
-    assert.equal(zip.readUInt32LE(offset),0x02014b50);
-    assert.equal(zip.readUInt32LE(offset+42),entry.offset);
-    const length=zip.readUInt16LE(offset+28);
-    assert.equal(zip.subarray(offset+46,offset+46+length).toString(),entry.name);
-    offset+=46+length;
-  }
-  assert.equal(zip.readUInt32LE(offset),0x06054b50);
-  assert.equal(zip.readUInt32LE(offset+16),central);
-  assert.equal(zip.readUInt16LE(offset+10),entries.length);
-  const expected=['package.json',...readdirSync(new URL('src/',root),{recursive:true}).filter((n)=>n.endsWith('.js')).map((n)=>`src/${n.replaceAll('\\','/')}`)].sort();
-  assert.deepEqual(entries.map((e)=>e.name).sort(),expected);
+  assert.equal(result.status, 0, result.stderr);
+  const expected = ['package.json', ...readdirSync(new URL('src/', root), { recursive: true }).filter((n) => n.endsWith('.js')).map((n) => 'src/' + n.replaceAll('\\', '/'))].sort();
+  const actual = readdirSync(new URL('build/backend/', root), { recursive: true }).map((n) => n.replaceAll('\\', '/')).filter((n) => n.endsWith('.js') || n === 'package.json').sort();
+  assert.deepEqual(actual, expected);
+  for (const name of actual) assert.deepEqual(readFileSync(new URL('build/backend/' + name, root)), readFileSync(new URL(name, root)), name);
+  for (const fn of ['ApiFunction', 'WorkerFunction']) assert.match(resources[fn], /Code: \.\.\/build\/backend\//);
 });
 
 test('15.3 deploy prepareは変更セットを作って止まり、自動実行しない', () => {
@@ -382,7 +389,11 @@ test('13.5 インポート完了前は停止差分を適用せず、適用は全
   const result=runScript('restore-contacts.sh',['dev','apply-stops','build/example-stops.tsv','example-job']);
   assert.equal(result.status,0,result.stderr);
   assert.match(result.calls,/sesv2 update-contact .*--unsubscribe-all/);
-  assert.doesNotMatch(result.calls,/OPT_IN|--no-unsubscribe-all|delete-suppressed/);
+  assert.doesNotMatch(result.calls,/--no-unsubscribe-all|delete-suppressed/);
+  assert.match(result.calls, /merge\(.*TopicPreferences.*AttributesData/);
+  const payload = JSON.parse(read('build/dev.restore-contact.json'));
+  assert.deepEqual(payload.TopicPreferences, [{ TopicName: 'kaiho', SubscriptionStatus: 'OPT_OUT' }, { TopicName: 'event', SubscriptionStatus: 'OPT_IN' }]);
+  assert.deepEqual(JSON.parse(payload.AttributesData), { name: '会員', consent: { source: '入会' } });
 });
 
 test('18.2 技術資料は全U-xxを実機確認として残す', () => {
@@ -390,4 +401,140 @@ test('18.2 技術資料は全U-xxを実機確認として残す', () => {
   for(let i=1;i<=10;i++) assert.ok(text.includes(`U-${String(i).padStart(2,'0')}`));
   assert.match(text,/実機で確認/);
   assert.match(read('docs/運用手順書.md'),/実機で確認/);
+});
+
+test('13.2 カスタムアラームの名前空間とメトリクス名を出力実装と照合', async () => {
+  const { createMetrics } = await import('../../src/common/metrics.js');
+  for (const [resource, metric] of [['NeedsReviewAlarm', 'NeedsReview'], ['UnknownResultsAlarm', 'Unknown'], ['SesBusyAlarm', 'SesBusy']]) {
+    const entry = createMetrics({ env: 'dev', write: () => {} }).emit(metric);
+    assert.ok(resources[resource].includes(`Namespace: !Sub '${entry._aws.CloudWatchMetrics[0].Namespace.replace('dev', '${Env}')}'`));
+    assert.ok(resources[resource].includes(`MetricName: ${metric}\n`));
+  }
+});
+
+test('4.3・12.7 保持資源は初回作成失敗だけ削除し、更新置換では保持', () => {
+  for (const name of ['WebBucket', 'DataBucket', 'EventLogBucket', 'Table', 'ContactList', 'UserPool', 'OriginSecret', 'EraseSecret']) {
+    assert.match(resources[name], /DeletionPolicy: RetainExceptOnCreate\n    UpdateReplacePolicy: Retain/);
+  }
+  assert.doesNotMatch(main, /DeletionPolicy: Retain\n|AWS::SSM::Parameter/);
+});
+
+test('12.6 ListBucketはDataBucketと読取接頭辞へ限定', () => {
+  for (const name of ['ApiPolicy', 'WorkerPolicy']) {
+    const block = /Action: \['s3:ListBucket'\]\n\s+Resource: !GetAtt DataBucket.Arn\n\s+Condition:\n\s+StringLike: \{'s3:prefix': \[([^\]]+)\]\}/.exec(resources[name]);
+    assert.ok(block, name);
+    for (const prefix of ['imports/report/*', 'results/*', 'recipients/*', 'delivery-checks/*']) assert.ok(block[1].includes(`'${prefix}'`));
+    assert.doesNotMatch(block[1], /'\*'/);
+    if (name === 'WorkerPolicy') for (const prefix of ['imports/staging/*', 'imports/ready/*', 'backups/contacts/*']) assert.ok(block[1].includes(`'${prefix}'`));
+  }
+});
+
+test('8.3 Subscriptionは新旧とも実イベントの購読状態と既定状態を保持', () => {
+  const column = resources.EventsTable.split('\n').find((line) => line.includes('Name: subscription,'));
+  for (const name of ['oldtopicpreferences', 'newtopicpreferences']) assert.ok(column.includes(`${name}:struct<unsubscribeall:boolean,topicsubscriptionstatus:array<struct<topicname:string,subscriptionstatus:string>>,topicdefaultsubscriptionstatus:array<struct<topicname:string,subscriptionstatus:string>>>`));
+  assert.doesNotMatch(column, /[<,]topicpreferences:/);
+});
+
+test('15.4 設定初期化は未作成時だけ作り、既存設定・照会障害・作成競合を上書きしない', () => {
+  const existing = runScript('bootstrap-config.sh', ['dev']);
+  assert.equal(existing.status, 0, existing.stderr);
+  assert.doesNotMatch(existing.calls, /put-parameter/);
+  for (const env of ['dev', 'stg', 'prod']) {
+    const created = runScript('bootstrap-config.sh', [env], { MOCK_CONFIG: 'missing' });
+    assert.equal(created.status, 0, created.stderr);
+    const config = JSON.parse(read(`build/${env}.config.initial.json`));
+    assert.deepEqual(config, configDefaults(env));
+    assert.match(created.calls, /ssm put-parameter/);
+    assert.doesNotMatch(created.calls, /--overwrite/);
+  }
+  for (const MOCK_CONFIG of ['denied', 'network']) {
+    const r = runScript('bootstrap-config.sh', ['dev'], { MOCK_CONFIG });
+    assert.notEqual(r.status, 0);
+    assert.doesNotMatch(r.calls, /put-parameter/);
+  }
+  const race = runScript('bootstrap-config.sh', ['dev'], { MOCK_CONFIG: 'missing', MOCK_CONFIG_RACE: '1' });
+  assert.notEqual(race.status, 0);
+  assert.equal((race.calls.match(/put-parameter/g) ?? []).length, 1);
+});
+
+test('15.3 主・エッジprepareはREVIEW_IN_PROGRESSをCREATE、ROLLBACK_COMPLETEを停止', () => {
+  for (const script of ['deploy.sh', 'deploy-edge.sh']) {
+    for (const MOCK_STATUS of ['None', 'REVIEW_IN_PROGRESS']) {
+      const r = runScript(script, ['dev', 'prepare', 'review-create'], { MOCK_STATUS });
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.calls, /--change-set-type CREATE/);
+      assert.doesNotMatch(r.calls, /execute-change-set/);
+    }
+    for (const action of ['prepare', 'execute']) {
+      const r = runScript(script, ['dev', action, 'review-failed'], { MOCK_STATUS: 'ROLLBACK_COMPLETE' });
+      assert.notEqual(r.status, 0);
+      assert.match(r.stderr, /delete the failed stack explicitly/);
+      assert.doesNotMatch(r.calls, /create-change-set|execute-change-set|s3 cp/);
+    }
+  }
+});
+
+test('15.3 エッジはus-east-1でレビュー後だけ実行し、主へARNを渡す', () => {
+  const prepared = runScript('deploy-edge.sh', ['dev', 'prepare', 'edge-reviewed']);
+  assert.equal(prepared.status, 0, prepared.stderr);
+  assert.match(prepared.calls, /--region us-east-1 --stack-name postline-edge-dev/);
+  assert.doesNotMatch(prepared.calls, /execute-change-set/);
+  const rejected = runScript('deploy-edge.sh', ['dev', 'execute', 'edge-reviewed'], {}, 'yes\n');
+  assert.notEqual(rejected.status, 0);
+  assert.doesNotMatch(rejected.calls, /execute-change-set/);
+  const executed = runScript('deploy-edge.sh', ['dev', 'execute', 'edge-reviewed'], { MOCK_STATUS: 'REVIEW_IN_PROGRESS' }, 'execute postline-edge-dev edge-reviewed\n');
+  assert.equal(executed.status, 0, executed.stderr);
+  assert.match(executed.calls, /wait stack-create-complete/);
+  const mainPrepared = runScript('deploy.sh', ['dev', 'prepare', 'main-reviewed']);
+  assert.equal(mainPrepared.status, 0, mainPrepared.stderr);
+  const values = Object.fromEntries(JSON.parse(read('build/dev.main.resolved.params.json')).map((p) => [p.ParameterKey, p.ParameterValue]));
+  assert.match(values.CertificateArn, /^arn:aws:acm:us-east-1:111111111111:certificate\//);
+  assert.match(values.WebAclArn, /^arn:aws:wafv2:us-east-1:111111111111:global\/webacl\//);
+  assert.match(mainPrepared.calls, /--parameters file:\/\/build\/dev.main.resolved.params.json/);
+});
+
+test('15.3 WindowsのCRLF出力でもアカウント・出力・Topics・復元を照合できる', (t) => {
+  preserveWebConfig(t);
+  for (const [script, args] of [
+    ['deploy.sh', ['dev', 'prepare', 'crlf-review']],
+    ['deploy-edge.sh', ['dev', 'prepare', 'crlf-edge']],
+    ['deploy-web.sh', ['dev', 'config-only']],
+    ['bootstrap-config.sh', ['dev']],
+    ['restore-contacts.sh', ['dev', 'status', 'job-id']],
+  ]) {
+    const r = runScript(script, args, { MOCK_CRLF: '1' });
+    assert.equal(r.status, 0, `${script}: ${r.stderr}`);
+  }
+  assert.match(read('scripts/common.sh'), /AWS_CLI_FILE_ENCODING=UTF-8/);
+  for (const name of scripts.filter((name) => name !== 'common.sh')) assert.doesNotMatch(read(`scripts/${name}`), /\$\(aws\s|< <\(aws\s/);
+});
+
+test('15.3 画面は拡張子別Content-Typeと再検証キャッシュ指定で公開', (t) => {
+  preserveWebConfig(t);
+  const result = runScript('deploy-web.sh', ['dev'], { MOCK_CRLF: '1' });
+  assert.equal(result.status, 0, result.stderr);
+  for (const [extension, type] of [['html', 'text/html'], ['js', 'application/javascript'], ['css', 'text/css'], ['json', 'application/json']]) {
+    assert.ok(result.calls.includes(`--include *.${extension} --content-type ${type}; charset=utf-8 --cache-control no-cache,max-age=0,must-revalidate`));
+  }
+  assert.match(result.calls, /cloudfront create-invalidation/);
+  assert.match(result.calls, /cloudfront wait invalidation-completed .*--id EXAMPLEINVALIDATION/);
+});
+
+test('13.5 連絡先の読取失敗時は更新せず、未設定属性は追加しない', () => {
+  writeFileSync(new URL('build/example-stops.tsv', root), 'member@example.jp\tALL\n');
+  const failed = runScript('restore-contacts.sh', ['dev', 'apply-stops', 'build/example-stops.tsv', 'example-job'], { MOCK_CONTACT_ERROR: '1' });
+  assert.notEqual(failed.status, 0);
+  assert.doesNotMatch(failed.calls, /update-contact/);
+  const absent = runScript('restore-contacts.sh', ['dev', 'apply-stops', 'build/example-stops.tsv', 'example-job'], { MOCK_CONTACT_NO_ATTR: '1' });
+  assert.equal(absent.status, 0, absent.stderr);
+  assert.equal(JSON.parse(read('build/dev.restore-contact.json')).AttributesData, undefined);
+});
+
+test('第6段階の資料は現行の構築・画面・鍵・イベント手順と実機確認を示す', () => {
+  const build = read('docs/構築手順書.md');
+  const operations = read('docs/運用手順書.md');
+  for (const term of ['deploy-edge.sh', 'bootstrap-config.sh', 'GenerateSecretString', 'WorkerReservedConcurrency', 'AWS_CLI_FILE_ENCODING=UTF-8', 'カスタムメトリクスが出ること', 'topicSubscriptionStatus', 'topicDefaultSubscriptionStatus', '接頭辞限定ListBucket', '確認すること']) assert.ok(build.includes(term), term);
+  assert.match(build, /"MailType": "MARKETING"/);
+  assert.doesNotMatch(build, /画面本体がまだない|UsePreviousValue|PL_HMAC|"TRANSACTIONAL"/);
+  for (const term of ['OptIn/OptOut', 'OPT_IN/OPT_OUT', 'topicSubscriptionStatus', 'topicDefaultSubscriptionStatus', 'AttributesData', 'UTF-8', 'base64として復号しない', '存在しない場合だけ']) assert.ok(operations.includes(term), term);
 });

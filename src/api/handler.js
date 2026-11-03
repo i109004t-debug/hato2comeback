@@ -67,7 +67,7 @@ export function createHandler(deps = {}) {
       const user = await services.authz.resolveUser(claims.sub);
       authorize(user, route.operation, { pause_reason: 'USER' });
       const secret = await services.secrets.get('erase-hmac');
-      services.hmacKey = Buffer.from(secret.key, 'base64');
+      services.hmacKey = secret.key;
       const auditService = deps.audit ?? createAudit({ ...services, hmacKey: services.hmacKey });
       services.audit = auditService;
       audit = (action, target, details, email, result = 'SUCCESS') => auditService.write({ actor_sub: user.sub, action, target, result, request_id: requestId, ...(details ? { details } : {}), ...(email ? { email } : {}) });

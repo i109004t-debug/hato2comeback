@@ -54,7 +54,7 @@ test('T-16 CSV内の停止済み既存宛先は除外し、既存の解除操作
 
 test('T-17 完全削除のHMACはBatchGetItemで照合しCSVから除外', async () => {
   const f = managementFixture();
-  f.ddb.set({ PK: 'ERASED', SK: addressHash('new@example.com', Buffer.alloc(32, 7)) });
+  f.ddb.set({ PK: 'ERASED', SK: addressHash('new@example.com', '7'.repeat(64)) });
   const { id, result } = await runImport(f, f.importCsv());
   assert.equal(result.status, 'DONE'); assert.equal(f.jobs.size, 0);
   assert.deepEqual(JSON.parse(f.files.get(`imports/report/${id}.json`)).rows, [{ row: 2, code: 'ERASED_SKIPPED' }]);
@@ -142,7 +142,7 @@ test('T-51 完全削除とCSVのHMAC照合は同じ排他により競合しな�
   };
   await f.worker({ mode: 'import', import_id: received.json.import_id });
   assert.equal(eraseResponse.json.error_code, 'CONTACT_IMPORT_IN_PROGRESS');
-  assert.equal(f.ddb.get('ERASED', addressHash('new@example.com', Buffer.alloc(32, 7))), undefined);
+  assert.equal(f.ddb.get('ERASED', addressHash('new@example.com', '7'.repeat(64))), undefined);
 });
 
 test('5.4 完了記録の後に解放が失敗しても次の日次点検で解放できる', async () => {

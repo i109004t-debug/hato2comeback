@@ -31,10 +31,10 @@ export function addressHash(email, key) {
 
 export const addr8 = (email, key) => addressHash(email, key).slice(0, 8);
 
-export function createLogger({ fn, req_id, now = defaultNow, write = console.log } = {}) {
+export function createLogger({ fn, req_id, now = defaultNow, write = (line) => process.stdout.write(line) } = {}) {
   const emit = (level, msg, fields = {}) => {
     const entry = { ...redact(fields), ts: new Date(now()).toISOString(), level, fn: redactText(fn ?? ''), req_id: redactText(req_id ?? ''), msg: redactText(msg) };
-    write(JSON.stringify(entry));
+    write(`${JSON.stringify(entry)}\n`);
     return entry;
   };
   return Object.fromEntries(['debug', 'info', 'warn', 'error'].map((level) => [level, (msg, fields) => emit(level, msg, fields)]));

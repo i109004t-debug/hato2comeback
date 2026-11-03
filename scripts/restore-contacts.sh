@@ -12,9 +12,9 @@ OWNER="restore:$ENV"
 LOCK_KEY='{"PK":{"S":"LOCK"},"SK":{"S":"CONTACT_CREATE"}}'
 frozen() {
   local concurrency owner
-  concurrency=$(aws lambda get-function-concurrency --region "$REGION" --function-name "$API_FUNCTION" --query ReservedConcurrentExecutions --output text)
+  concurrency=$(aws_text lambda get-function-concurrency --region "$REGION" --function-name "$API_FUNCTION" --query ReservedConcurrentExecutions --output text)
   [[ $concurrency == 0 ]] || die 'Freeze the management API first (new registrations/imports must be blocked)'
-  owner=$(aws dynamodb get-item --region "$REGION" --table-name "postline-$ENV" --consistent-read --key "$LOCK_KEY" --query Item.owner.S --output text)
+  owner=$(aws_text dynamodb get-item --region "$REGION" --table-name "postline-$ENV" --consistent-read --key "$LOCK_KEY" --query Item.owner.S --output text)
   [[ $owner == "$OWNER" ]] || die 'Restore must own CONTACT_CREATE; reconcile existing jobs first'
 }
 case "${2:-}" in
@@ -60,19 +60,23 @@ case "${2:-}" in
     ;;
   apply-stops)
     frozen
+    mkdir -p build
     MANIFEST=${3:?TSV file: email TAB topic-name or ALL}; JOB=${4:?completed JobId}
     [[ -f $MANIFEST ]] || die 'Stop manifest missing'
-    state=$(aws sesv2 get-import-job --region "$REGION" --job-id "$JOB" --query JobStatus --output text)
+    state=$(aws_text sesv2 get-import-job --region "$REGION" --job-id "$JOB" --query JobStatus --output text)
     [[ $state == COMPLETED ]] || die 'Import must be COMPLETED; check failed-record counts separately'
     # SESには購読状態の条件付き更新がない。競合で他トピックを戻さないよう全停止へ倒す。
     while IFS=$'\t' read -r email topic extra || [[ -n ${email:-} ]]; do
       [[ -n $email && $email != *[[:space:]\"\\]* && -z $extra ]] || die 'Invalid stop manifest'
       [[ $topic == ALL || $topic =~ ^[a-z0-9_]{1,20}$ ]] || die 'Invalid stop topic'
-      all=$(aws sesv2 get-contact --region "$REGION" --contact-list-name "$LIST" --email-address "$email" --query UnsubscribeAll --output text)
-      [[ $all == True || $all == False ]] || die 'Unknown unsubscribe state'
-      [[ $all != True ]] || continue
+      # 1回の読取から更新入力を作り、未変更の購読設定・属性も必ず引き継ぐ。
+      # 未設定のAttributesDataはnullを送らずキーごと省く。
+      CURRENT="build/$ENV.restore-contact.json"
+      aws_text sesv2 get-contact --region "$REGION" --contact-list-name "$LIST" --email-address "$email" \
+        --query "merge({ContactListName:'$LIST',EmailAddress:EmailAddress,TopicPreferences:TopicPreferences || \`[]\`}, AttributesData && {AttributesData:AttributesData} || \`{}\`)" \
+        --output json > "$CURRENT"
       sleep 1.1
-      aws sesv2 update-contact --region "$REGION" --contact-list-name "$LIST" --email-address "$email" --unsubscribe-all
+      aws sesv2 update-contact --region "$REGION" --cli-input-json "file://$CURRENT" --unsubscribe-all
       sleep 1.1
     done < "$MANIFEST"
     printf 'Re-query delayed events and repeat stop-only reconciliation. Verify counts, attributes and suppression; record administrator approval. Sending/API remain disabled.\n'
