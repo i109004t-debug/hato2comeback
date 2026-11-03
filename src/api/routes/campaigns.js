@@ -58,7 +58,7 @@ async function get(ctx) {
     value.review_recipients = rows.slice(campaign.review.index_from, campaign.review.index_to + 1).map((row) => row.e);
     const day = (time) => new Date(time).toISOString().slice(0, 10).replaceAll('-', '/');
     const destinations = value.review_recipients.map((email) => `contains(mail.destination, '${email.replaceAll("'", "''")}')`);
-    value.athena_query = `SELECT * FROM postline_events.ses_events WHERE dt BETWEEN '${day(campaign.started_at ?? campaign.created_at)}' AND '${day(ctx.runtime.now())}' AND element_at(mail.tags, 'campaign')[1] = '${campaign.campaign_id}' AND eventtype = 'Send'${destinations.length ? ` AND (${destinations.join(' OR ')})` : ''} ORDER BY mail.timestamp`;
+    value.athena_query = `SELECT * FROM ht2_events.ses_events WHERE dt BETWEEN '${day(campaign.started_at ?? campaign.created_at)}' AND '${day(ctx.runtime.now())}' AND element_at(mail.tags, 'campaign')[1] = '${campaign.campaign_id}' AND eventtype = 'Send'${destinations.length ? ` AND (${destinations.join(' OR ')})` : ''} ORDER BY mail.timestamp`;
   }
   return value;
 }
@@ -78,7 +78,7 @@ async function submit(ctx) {
   assertStatus(campaign, ['DRAFT']);
   const f = await fixed(runtime, campaign);
   const rev = (campaign.rev ?? 0) + 1;
-  const template_name = `pl-c-${campaign.campaign_id}-${rev}`;
+  const template_name = `ht2-c-${campaign.campaign_id}-${rev}`;
   const content = { Subject: campaign.subject, Text: f.text };
   try { await runtime.ses.createEmailTemplate({ TemplateName: template_name, TemplateContent: content }); } catch (error) {
     if (error.name !== 'AlreadyExistsException') throw error;
@@ -168,7 +168,7 @@ async function describeStart(runtime, campaign) {
 
 async function getStartSchedule(runtime, campaign) {
   try {
-    const schedule = await runtime.scheduler.getSchedule({ Name: campaign.schedule_name ?? `pl-${campaign.start_execution_name ?? campaign.campaign_id}`, GroupName: runtime.scheduleGroup });
+    const schedule = await runtime.scheduler.getSchedule({ Name: campaign.schedule_name ?? `ht2-${campaign.start_execution_name ?? campaign.campaign_id}`, GroupName: runtime.scheduleGroup });
     if (!schedule || typeof schedule !== 'object') throw new Error('Invalid schedule response');
     return schedule;
   } catch (error) {
@@ -225,7 +225,7 @@ async function start(ctx) {
     }
     return clean(campaign);
   }
-  const schedule_name = `pl-${attempt.start_execution_name}`;
+  const schedule_name = `ht2-${attempt.start_execution_name}`;
   campaign = await updateCampaign(runtime, campaign, ['APPROVED'], { ...attempt, status: 'SCHEDULED', start_mode: 'SCHEDULED', scheduled_at: new Date(body.at).toISOString(), schedule_name, started_by: user.sub, start_requested_at: timestamp(runtime), start_error: '' });
   const local = new Date(Date.parse(body.at) + 9 * 3600000).toISOString().slice(0, 19);
   const input = {

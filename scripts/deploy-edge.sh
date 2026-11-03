@@ -3,10 +3,10 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%/*}/common.sh"
 init_env "${1:?Usage: bash scripts/deploy-edge.sh ENV prepare|execute [change-set-name]}"
 REGION=us-east-1
-STACK="postline-edge-$ENV"
+STACK="ht2-edge-$ENV"
 ACTION=${2:-prepare}
-PARAMS=${POSTLINE_EDGE_PARAMS:-build/$ENV.edge.params.json}
-CHANGE_SET=${3:-postline-edge-$ENV-$EPOCHSECONDS}
+PARAMS=${HT2_EDGE_PARAMS:-build/$ENV.edge.params.json}
+CHANGE_SET=${3:-ht2-edge-$ENV-$EPOCHSECONDS}
 [[ $CHANGE_SET =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]] || die 'Invalid change set name'
 case "$ACTION" in
   prepare)

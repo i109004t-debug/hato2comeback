@@ -159,7 +159,7 @@ test('日次は既存属性取得を100件に制限し、不足を明示して�
   assert.equal(manifest.attributes_missing, 5);
   const rows = gunzipSync(f.files.get('backups/contacts/2026-11-03.jsonl.gz')).toString('utf8').trim().split('\n').map(JSON.parse);
   assert.equal(rows.length, 105);
-  assert.equal(rows.filter((row) => row.PostlineMetadataStatus === 'MISSING').length, 5);
+  assert.equal(rows.filter((row) => row.HT2MetadataStatus === 'MISSING').length, 5);
   assert.ok(f.notices.some((notice) => notice.code === 'BACKUP_ATTRIBUTES_MISSING'));
 });
 
@@ -225,7 +225,7 @@ test('属性取得障害でも購読snapshotを残し、欠損と通知を記録
   assert.equal((await f.worker({ mode: 'daily' }, f.context)).results.backup, 'FAIL');
   const row = JSON.parse(gunzipSync(f.files.get('backups/contacts/2026-11-03.jsonl.gz')).toString('utf8').trim());
   assert.equal(row.EmailAddress, f.addresses[0]);
-  assert.equal(row.PostlineMetadataStatus, 'MISSING');
+  assert.equal(row.HT2MetadataStatus, 'MISSING');
 });
 
 test('旧SESの1024バイトを超える属性は切り捨てず移行未完了として停止する', async () => {

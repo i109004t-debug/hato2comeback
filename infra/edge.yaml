@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Postline certificate and CloudFront WAF (us-east-1)
+Description: HT2 certificate and CloudFront WAF (us-east-1)
 Parameters:
   Env:
     Type: String
@@ -29,11 +29,11 @@ Resources:
   WebAcl:
     Type: AWS::WAFv2::WebACL
     Properties:
-      Name: !Sub 'postline-${Env}'
+      Name: !Sub 'ht2-${Env}'
       Scope: CLOUDFRONT
       DefaultAction: {Allow: {}}
       AssociationConfig: {RequestBody: {CLOUDFRONT: {DefaultSizeInspectionLimit: KB_64}}}
-      VisibilityConfig: {CloudWatchMetricsEnabled: true, SampledRequestsEnabled: false, MetricName: !Sub 'postline-${Env}'}
+      VisibilityConfig: {CloudWatchMetricsEnabled: true, SampledRequestsEnabled: false, MetricName: !Sub 'ht2-${Env}'}
       Rules:
         - Name: Common
           Priority: 0

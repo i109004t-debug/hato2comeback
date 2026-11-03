@@ -1,5 +1,5 @@
 {
-  "Comment": "Postline 7.2 Standard workflow; only rejected Lambda invocations may retry.",
+  "Comment": "HT2 7.2 Standard workflow; only rejected Lambda invocations may retry.",
   "StartAt": "Prepare",
   "States": {
     "Prepare": {

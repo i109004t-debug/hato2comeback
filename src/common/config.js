@@ -8,7 +8,7 @@ export function configDefaults(env) {
     sending_enabled: false, max_rate_per_sec: 10, ses_rate_safety_factor: 0.8,
     batch_size: 200, progress_every: 20, max_recipients_per_campaign: 100000,
     lock_ttl_seconds: 7200, pause_timeout_days: 7,
-    reputation_alarms: [`postline-${env}-ses-bounce-rate`, `postline-${env}-ses-complaint-rate`],
+    reputation_alarms: [`ht2-${env}-ses-bounce-rate`, `ht2-${env}-ses-complaint-rate`],
     campaign_bounce_pause_ratio: 0.05, campaign_min_sample: 200,
     campaign_delay_pause_ratio: 0.10, daily_send_cap: 1000,
     delivery_check_required: env === 'prod', nonprod_allowlist: [], nonprod_allowlist_s3_key: '',
@@ -69,7 +69,7 @@ export function createConfig({ ssm, s3, dataBucket, env, now = defaultNow }) {
       if (!pending) {
         const started = now();
         pending = (async () => {
-          const response = await ssm.getParameter({ Name: `/postline/${env}/config` });
+          const response = await ssm.getParameter({ Name: `/ht2/${env}/config` });
           let input;
           try {
             const raw = response.Parameter?.Value;

@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Postline main stack (ap-northeast-1, one account per environment)
+Description: HT2 main stack (ap-northeast-1, one account per environment)
 Parameters:
   Env:
     Type: String
@@ -145,7 +145,7 @@ Resources:
     DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
-      TableName: !Sub 'postline-${Env}'
+      TableName: !Sub 'ht2-${Env}'
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions: [{AttributeName: PK, AttributeType: S}, {AttributeName: SK, AttributeType: S}]
       KeySchema: [{AttributeName: PK, KeyType: HASH}, {AttributeName: SK, KeyType: RANGE}]
@@ -156,7 +156,7 @@ Resources:
   ConfigurationSet:
     Type: AWS::SES::ConfigurationSet
     Properties:
-      Name: !Sub 'postline-${Env}'
+      Name: !Sub 'ht2-${Env}'
       DeliveryOptions: {TlsPolicy: REQUIRE}
       ReputationOptions: {ReputationMetricsEnabled: true}
       SendingOptions: {SendingEnabled: true}
@@ -175,8 +175,8 @@ Resources:
     DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
-      ContactListName: postline
-      Description: !Sub 'Postline ${Env}'
+      ContactListName: ht2
+      Description: !Sub 'HT2 ${Env}'
       Topics:
         - TopicName: !Ref Topic1Name
           DisplayName: !Ref Topic1Display
@@ -240,7 +240,7 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
-              ArnEquals: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}'}
+              ArnEquals: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/ht2-${Env}'}
       Policies:
         - PolicyName: SesEvents
           PolicyDocument:
@@ -250,7 +250,7 @@ Resources:
   EventStream:
     Type: AWS::KinesisFirehose::DeliveryStream
     Properties:
-      DeliveryStreamName: !Sub 'postline-${Env}-events'
+      DeliveryStreamName: !Sub 'ht2-${Env}-events'
       DeliveryStreamType: DirectPut
       DeliveryStreamEncryptionConfigurationInput: {KeyType: AWS_OWNED_CMK}
       ExtendedS3DestinationConfiguration:
@@ -267,7 +267,7 @@ Resources:
     Type: AWS::Glue::Database
     Properties:
       CatalogId: !Ref 'AWS::AccountId'
-      DatabaseInput: {Name: postline_events}
+      DatabaseInput: {Name: ht2_events}
   EventsTable:
     Type: AWS::Glue::Table
     Properties:
@@ -305,7 +305,7 @@ Resources:
   AthenaWorkGroup:
     Type: AWS::Athena::WorkGroup
     Properties:
-      Name: !Sub 'postline-${Env}'
+      Name: !Sub 'ht2-${Env}'
       WorkGroupConfiguration:
         EnforceWorkGroupConfiguration: true
         PublishCloudWatchMetricsEnabled: true
@@ -318,7 +318,7 @@ Resources:
     DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
-      UserPoolName: !Sub 'postline-${Env}'
+      UserPoolName: !Sub 'ht2-${Env}'
       UserPoolTier: ESSENTIALS
       DeletionProtection: !If [IsProd, ACTIVE, INACTIVE]
       UsernameAttributes: [email]
@@ -385,7 +385,7 @@ Resources:
     DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
-      Name: !Sub '/postline/${Env}/origin-verify'
+      Name: !Sub '/ht2/${Env}/origin-verify'
       GenerateSecretString:
         SecretStringTemplate: '{"previous":""}'
         GenerateStringKey: current
@@ -396,7 +396,7 @@ Resources:
     DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
-      Name: !Sub '/postline/${Env}/erase-hmac'
+      Name: !Sub '/ht2/${Env}/erase-hmac'
       GenerateSecretString:
         SecretStringTemplate: '{}'
         GenerateStringKey: key
@@ -404,29 +404,29 @@ Resources:
         ExcludePunctuation: true
   ApiLogGroup:
     Type: AWS::Logs::LogGroup
-    Properties: {LogGroupName: !Sub '/aws/lambda/postline-${Env}-api', RetentionInDays: 365}
+    Properties: {LogGroupName: !Sub '/aws/lambda/ht2-${Env}-api', RetentionInDays: 365}
   WorkerLogGroup:
     Type: AWS::Logs::LogGroup
-    Properties: {LogGroupName: !Sub '/aws/lambda/postline-${Env}-worker', RetentionInDays: 365}
+    Properties: {LogGroupName: !Sub '/aws/lambda/ht2-${Env}-worker', RetentionInDays: 365}
   StateMachineLogGroup:
     Type: AWS::Logs::LogGroup
-    Properties: {LogGroupName: !Sub '/aws/vendedlogs/states/postline-${Env}', RetentionInDays: 90}
+    Properties: {LogGroupName: !Sub '/aws/vendedlogs/states/ht2-${Env}', RetentionInDays: 90}
   AccessLogGroup:
     Type: AWS::Logs::LogGroup
-    Properties: {LogGroupName: !Sub '/postline/${Env}/http-api', RetentionInDays: 365}
+    Properties: {LogGroupName: !Sub '/ht2/${Env}/http-api', RetentionInDays: 365}
   AlertTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: !Sub 'postline-${Env}-alerts'
+      TopicName: !Sub 'ht2-${Env}-alerts'
       Subscription: [{Protocol: email, Endpoint: !Ref AlertEmail}]
   ScheduleGroup:
     Type: AWS::Scheduler::ScheduleGroup
-    Properties: {Name: !Sub 'postline-${Env}'}
+    Properties: {Name: !Sub 'ht2-${Env}'}
   DailySchedule:
     Type: AWS::Scheduler::Schedule
     DependsOn: [SchedulerPolicy, WorkerPolicy]
     Properties:
-      Name: !Sub 'postline-${Env}-daily'
+      Name: !Sub 'ht2-${Env}-daily'
       GroupName: !Ref ScheduleGroup
       ScheduleExpression: cron(0 3 * * ? *)
       ScheduleExpressionTimezone: Asia/Tokyo
@@ -440,7 +440,7 @@ Resources:
     Type: AWS::Lambda::Function
     DependsOn: ApiLogGroup
     Properties:
-      FunctionName: !Sub 'postline-${Env}-api'
+      FunctionName: !Sub 'ht2-${Env}-api'
       Runtime: nodejs24.x
       Architectures: [arm64]
       Handler: src/api/handler.handler
@@ -461,11 +461,11 @@ Resources:
           ALERT_TOPIC_ARN: !Ref AlertTopic
           WEB_CLIENT_ID: !Ref WebClient
           USER_POOL_ID: !Ref UserPool
-          STATE_MACHINE_ARN: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:postline-${Env}'
+          STATE_MACHINE_ARN: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ht2-${Env}'
           SCHEDULE_GROUP: !Ref ScheduleGroup
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
-          WORKER_FUNCTION_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
-          CONFIG_PARAM: !Sub '/postline/${Env}/config'
+          WORKER_FUNCTION_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ht2-${Env}-worker'
+          CONFIG_PARAM: !Sub '/ht2/${Env}/config'
           ORIGIN_SECRET_ARN: !Ref OriginSecret
           ERASE_SECRET_ARN: !Ref EraseSecret
           LOG_LEVEL: INFO
@@ -473,7 +473,7 @@ Resources:
     Type: AWS::Lambda::Function
     DependsOn: WorkerLogGroup
     Properties:
-      FunctionName: !Sub 'postline-${Env}-worker'
+      FunctionName: !Sub 'ht2-${Env}-worker'
       Runtime: nodejs24.x
       Architectures: [arm64]
       Handler: src/worker/handler.handler
@@ -495,11 +495,11 @@ Resources:
           ALERT_TOPIC_ARN: !Ref AlertTopic
           WEB_CLIENT_ID: !Ref WebClient
           USER_POOL_ID: !Ref UserPool
-          STATE_MACHINE_ARN: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:postline-${Env}'
+          STATE_MACHINE_ARN: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ht2-${Env}'
           SCHEDULE_GROUP: !Ref ScheduleGroup
           SCHEDULER_ROLE_ARN: !GetAtt SchedulerRole.Arn
-          WORKER_FUNCTION_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
-          CONFIG_PARAM: !Sub '/postline/${Env}/config'
+          WORKER_FUNCTION_ARN: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ht2-${Env}-worker'
+          CONFIG_PARAM: !Sub '/ht2/${Env}/config'
           ORIGIN_SECRET_ARN: !Ref OriginSecret
           ERASE_SECRET_ARN: !Ref EraseSecret
           LOG_LEVEL: INFO
@@ -510,7 +510,7 @@ Resources:
     Type: AWS::StepFunctions::StateMachine
     DependsOn: StateMachinePolicy
     Properties:
-      StateMachineName: !Sub 'postline-${Env}'
+      StateMachineName: !Sub 'ht2-${Env}'
       StateMachineType: STANDARD
       RoleArn: !GetAtt StateMachineRole.Arn
       DefinitionS3Location: broadcast.asl.json
@@ -523,7 +523,7 @@ Resources:
         Destinations: [{CloudWatchLogsLogGroup: {LogGroupArn: !GetAtt StateMachineLogGroup.Arn}}]
   HttpApi:
     Type: AWS::ApiGatewayV2::Api
-    Properties: {Name: !Sub 'postline-${Env}', ProtocolType: HTTP}
+    Properties: {Name: !Sub 'ht2-${Env}', ProtocolType: HTTP}
   JwtAuthorizer:
     Type: AWS::ApiGatewayV2::Authorizer
     Properties:
@@ -567,12 +567,12 @@ Resources:
   OriginAccessControl:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
-      OriginAccessControlConfig: {Name: !Sub 'postline-${Env}', OriginAccessControlOriginType: s3, SigningBehavior: always, SigningProtocol: sigv4}
+      OriginAccessControlConfig: {Name: !Sub 'ht2-${Env}', OriginAccessControlOriginType: s3, SigningBehavior: always, SigningProtocol: sigv4}
   SecurityHeaders:
     Type: AWS::CloudFront::ResponseHeadersPolicy
     Properties:
       ResponseHeadersPolicyConfig:
-        Name: !Sub 'postline-${Env}-security'
+        Name: !Sub 'ht2-${Env}-security'
         SecurityHeadersConfig:
           StrictTransportSecurity: {AccessControlMaxAgeSec: 63072000, IncludeSubdomains: true, Preload: true, Override: true}
           ContentTypeOptions: {Override: true}
@@ -587,7 +587,7 @@ Resources:
     Type: AWS::CloudFront::CachePolicy
     Properties:
       CachePolicyConfig:
-        Name: !Sub 'postline-${Env}-api-no-cache'
+        Name: !Sub 'ht2-${Env}-api-no-cache'
         MinTTL: 0
         DefaultTTL: 0
         MaxTTL: 0
@@ -600,7 +600,7 @@ Resources:
     Type: AWS::CloudFront::OriginRequestPolicy
     Properties:
       OriginRequestPolicyConfig:
-        Name: !Sub 'postline-${Env}-api-forward'
+        Name: !Sub 'ht2-${Env}-api-forward'
         CookiesConfig: {CookieBehavior: all}
         HeadersConfig: {HeaderBehavior: allExcept, Headers: [host]}
         QueryStringsConfig: {QueryStringBehavior: all}
@@ -703,7 +703,7 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
-              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:postline-${Env}'}
+              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ht2-${Env}'}
   SchedulerRole:
     Type: AWS::IAM::Role
     Properties:
@@ -715,7 +715,7 @@ Resources:
             Action: sts:AssumeRole
             Condition:
               StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
-              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule-group/postline-${Env}'}
+              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule-group/ht2-${Env}'}
   ApiPolicy:
     Type: AWS::IAM::Policy
     Properties:
@@ -726,10 +726,10 @@ Resources:
         Statement:
           - Effect: Allow
             Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
-            Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/postline-${Env}-api:*'
+            Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ht2-${Env}-api:*'
           - Effect: Allow
             Action: ['ssm:GetParameter']
-            Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/postline/${Env}/config'
+            Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ht2/${Env}/config'
           - Effect: Allow
             Action: ['secretsmanager:GetSecretValue']
             Resource: [!Ref OriginSecret, !Ref EraseSecret]
@@ -742,10 +742,10 @@ Resources:
             Resource: '*'
           - Effect: Allow
             Action: ['ses:GetEmailIdentity', 'ses:GetConfigurationSet', 'ses:GetConfigurationSetEventDestinations', 'ses:GetContactList', 'ses:ListContacts', 'ses:GetContact', 'ses:CreateContact', 'ses:UpdateContact', 'ses:DeleteContact', 'ses:CreateEmailTemplate', 'ses:GetEmailTemplate', 'ses:TestRenderEmailTemplate']
-            Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
+            Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/ht2-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/ht2', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/ht2-c-*']
           - Effect: Allow
             Action: ['ses:SendEmail']
-            Resource: [!If [IsProd, !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*'], !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
+            Resource: [!If [IsProd, !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*'], !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/ht2-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/ht2', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/ht2-c-*']
             Condition:
               StringLike: {'ses:FromAddress': !Sub '*@${SenderDomain}'}
           - Effect: Allow
@@ -764,16 +764,16 @@ Resources:
             Resource: [!Sub '${DataBucket.Arn}/imports/staging/*']
           - Effect: Allow
             Action: ['states:StartExecution']
-            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:postline-${Env}'
+            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ht2-${Env}'
           - Effect: Allow
             Action: ['states:DescribeExecution']
-            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:postline-${Env}:*'
+            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:ht2-${Env}:*'
           - Effect: Allow
             Action: ['states:SendTaskSuccess', 'states:SendTaskFailure']
             Resource: '*'
           - Effect: Allow
             Action: ['scheduler:CreateSchedule', 'scheduler:DeleteSchedule', 'scheduler:GetSchedule']
-            Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/postline-${Env}/pl-*'
+            Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/ht2-${Env}/ht2-*'
           - Effect: Allow
             Action: ['iam:PassRole']
             Resource: !GetAtt SchedulerRole.Arn
@@ -783,11 +783,11 @@ Resources:
             Resource: !GetAtt UserPool.Arn
           - Effect: Allow
             Action: ['lambda:InvokeFunction']
-            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
+            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ht2-${Env}-worker'
           - Sid: DenyFixedTemplateMutation
             Effect: Deny
             Action: ['ses:UpdateEmailTemplate', 'ses:DeleteEmailTemplate']
-            Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*'
+            Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/ht2-c-*'
           - Sid: DenyDestructiveSes
             Effect: Deny
             Action: ['ses:DeleteContactList', 'ses:UpdateContactList', 'ses:DeleteEmailIdentity', 'ses:DeleteSuppressedDestination', 'ses:PutAccount*']
@@ -808,10 +808,10 @@ Resources:
         Statement:
           - Effect: Allow
             Action: ['logs:CreateLogStream', 'logs:PutLogEvents']
-            Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/postline-${Env}-worker:*'
+            Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/ht2-${Env}-worker:*'
           - Effect: Allow
             Action: ['ssm:GetParameter']
-            Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/postline/${Env}/config'
+            Resource: !Sub 'arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/ht2/${Env}/config'
           - Effect: Allow
             Action: ['secretsmanager:GetSecretValue']
             Resource: !Ref EraseSecret
@@ -823,15 +823,15 @@ Resources:
             Resource: '*'
           - Effect: Allow
             Action: ['ses:GetEmailIdentity', 'ses:GetConfigurationSet', 'ses:GetConfigurationSetEventDestinations', 'ses:GetContactList', 'ses:ListContacts']
-            Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
+            Resource: [!Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/ht2-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/ht2', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/ht2-c-*']
           - Effect: Allow
             Action: ['ses:SendEmail']
-            Resource: [!If [IsProd, !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*'], !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/postline-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/postline', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*']
+            Resource: [!If [IsProd, !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/${SenderDomain}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:identity/*'], !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:configuration-set/ht2-${Env}', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:contact-list/ht2', !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/ht2-c-*']
             Condition:
               StringLike: {'ses:FromAddress': !Sub '*@${SenderDomain}'}
           - Effect: Allow
             Action: ['ses:DeleteEmailTemplate']
-            Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*'
+            Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/ht2-c-*'
           - Effect: Allow
             Action: ['cloudwatch:GetMetricData', 'cloudwatch:DescribeAlarms']
             Resource: '*'
@@ -851,14 +851,14 @@ Resources:
             Resource: !Ref AlertTopic
           - Effect: Allow
             Action: ['states:DescribeExecution']
-            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:postline-${Env}:*'
+            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:ht2-${Env}:*'
           - Effect: Allow
             Action: ['scheduler:GetSchedule']
-            Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/postline-${Env}/pl-*'
+            Resource: !Sub 'arn:${AWS::Partition}:scheduler:${AWS::Region}:${AWS::AccountId}:schedule/ht2-${Env}/ht2-*'
           - Sid: DenyFixedTemplateMutation
             Effect: Deny
             Action: ['ses:UpdateEmailTemplate']
-            Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/pl-c-*'
+            Resource: !Sub 'arn:${AWS::Partition}:ses:${AWS::Region}:${AWS::AccountId}:template/ht2-c-*'
           - Sid: DenyDestructiveSes
             Effect: Deny
             Action: ['ses:DeleteContactList', 'ses:UpdateContactList', 'ses:DeleteEmailIdentity', 'ses:DeleteSuppressedDestination', 'ses:PutAccount*']
@@ -879,7 +879,7 @@ Resources:
         Statement:
           - Effect: Allow
             Action: ['lambda:InvokeFunction']
-            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
+            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ht2-${Env}-worker'
           - Effect: Allow
             Action: ['dynamodb:UpdateItem']
             Resource: !GetAtt Table.Arn
@@ -897,14 +897,14 @@ Resources:
         Statement:
           - Effect: Allow
             Action: ['states:StartExecution']
-            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:postline-${Env}'
+            Resource: !Sub 'arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:ht2-${Env}'
           - Effect: Allow
             Action: ['lambda:InvokeFunction']
-            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:postline-${Env}-worker'
+            Resource: !Sub 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:ht2-${Env}-worker'
   SesBounceRateAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-ses-bounce-rate'
+      AlarmName: !Sub 'ht2-${Env}-ses-bounce-rate'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
@@ -918,7 +918,7 @@ Resources:
   SesComplaintRateAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-ses-complaint-rate'
+      AlarmName: !Sub 'ht2-${Env}-ses-complaint-rate'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
@@ -932,12 +932,12 @@ Resources:
   NeedsReviewAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-needs-review'
+      AlarmName: !Sub 'ht2-${Env}-needs-review'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       TreatMissingData: missing
-      Namespace: !Sub 'Postline/${Env}'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: NeedsReview
       Statistic: Sum
       Period: 300
@@ -946,12 +946,12 @@ Resources:
   UnknownResultsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-unknown-results'
+      AlarmName: !Sub 'ht2-${Env}-unknown-results'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       TreatMissingData: missing
-      Namespace: !Sub 'Postline/${Env}'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Unknown
       Statistic: Sum
       Period: 300
@@ -960,12 +960,12 @@ Resources:
   SesBusyAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-ses-busy'
+      AlarmName: !Sub 'ht2-${Env}-ses-busy'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
       TreatMissingData: missing
-      Namespace: !Sub 'Postline/${Env}'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: SesBusy
       Statistic: Sum
       Period: 300
@@ -974,7 +974,7 @@ Resources:
   FirehoseDeliveryAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-firehose-delivery'
+      AlarmName: !Sub 'ht2-${Env}-firehose-delivery'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
@@ -989,7 +989,7 @@ Resources:
   FirehoseFreshnessAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-firehose-freshness'
+      AlarmName: !Sub 'ht2-${Env}-firehose-freshness'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
@@ -1004,7 +1004,7 @@ Resources:
   ApiErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-api-lambda-errors'
+      AlarmName: !Sub 'ht2-${Env}-api-lambda-errors'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
@@ -1019,7 +1019,7 @@ Resources:
   WorkerErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-worker-lambda-errors'
+      AlarmName: !Sub 'ht2-${Env}-worker-lambda-errors'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
@@ -1034,7 +1034,7 @@ Resources:
   RenderingOrRejectAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-rendering-or-reject'
+      AlarmName: !Sub 'ht2-${Env}-rendering-or-reject'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
@@ -1064,7 +1064,7 @@ Resources:
   StateMachineFailedAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-sfn-failed'
+      AlarmName: !Sub 'ht2-${Env}-sfn-failed'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
@@ -1096,7 +1096,7 @@ Resources:
   Api5xxAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-api-5xx'
+      AlarmName: !Sub 'ht2-${Env}-api-5xx'
       AlarmActions: [!Ref AlertTopic]
       EvaluationPeriods: 1
       DatapointsToAlarm: 1
@@ -1128,8 +1128,8 @@ Resources:
   SystemPauseReason0Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-operator-switch'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-operator-switch'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: OPERATOR_SWITCH}]
       Statistic: Sum
@@ -1141,8 +1141,8 @@ Resources:
   SystemPauseReason1Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-reputation-alarm'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-reputation-alarm'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: REPUTATION_ALARM}]
       Statistic: Sum
@@ -1154,8 +1154,8 @@ Resources:
   SystemPauseReason2Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-campaign-bounce'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-campaign-bounce'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: CAMPAIGN_BOUNCE}]
       Statistic: Sum
@@ -1167,8 +1167,8 @@ Resources:
   SystemPauseReason3Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-campaign-delay'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-campaign-delay'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: CAMPAIGN_DELAY}]
       Statistic: Sum
@@ -1180,8 +1180,8 @@ Resources:
   SystemPauseReason4Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-events-missing'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-events-missing'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: EVENTS_MISSING}]
       Statistic: Sum
@@ -1193,8 +1193,8 @@ Resources:
   SystemPauseReason5Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-event-log-stale'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-event-log-stale'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: EVENT_LOG_STALE}]
       Statistic: Sum
@@ -1206,8 +1206,8 @@ Resources:
   SystemPauseReason6Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-monitoring-unavailable'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-monitoring-unavailable'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: MONITORING_UNAVAILABLE}]
       Statistic: Sum
@@ -1219,8 +1219,8 @@ Resources:
   SystemPauseReason7Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-content-error'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-content-error'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: CONTENT_ERROR}]
       Statistic: Sum
@@ -1232,8 +1232,8 @@ Resources:
   SystemPauseReason8Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-auth-check'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-auth-check'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: AUTH_CHECK}]
       Statistic: Sum
@@ -1245,8 +1245,8 @@ Resources:
   SystemPauseReason9Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-ses-paused'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-ses-paused'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: SES_PAUSED}]
       Statistic: Sum
@@ -1258,8 +1258,8 @@ Resources:
   SystemPauseReason10Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-ses-unstable'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-ses-unstable'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: SES_UNSTABLE}]
       Statistic: Sum
@@ -1271,8 +1271,8 @@ Resources:
   SystemPauseReason11Alarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-quota'
-      Namespace: !Sub 'Postline/${Env}'
+      AlarmName: !Sub 'ht2-${Env}-paused-quota'
+      Namespace: !Sub 'HT2/${Env}'
       MetricName: Paused
       Dimensions: [{Name: Reason, Value: QUOTA}]
       Statistic: Sum
@@ -1284,7 +1284,7 @@ Resources:
   PausedBySystemAlarm:
     Type: AWS::CloudWatch::CompositeAlarm
     Properties:
-      AlarmName: !Sub 'postline-${Env}-paused-by-system'
+      AlarmName: !Sub 'ht2-${Env}-paused-by-system'
       AlarmActions: [!Ref AlertTopic]
       AlarmRule: !Sub
         - 'ALARM("${A0}") OR ALARM("${A1}") OR ALARM("${A2}") OR ALARM("${A3}") OR ALARM("${A4}") OR ALARM("${A5}") OR ALARM("${A6}") OR ALARM("${A7}") OR ALARM("${A8}") OR ALARM("${A9}") OR ALARM("${A10}") OR ALARM("${A11}")'
@@ -1346,7 +1346,7 @@ Outputs:
   AlertTopicArn:
     Value: !Ref AlertTopic
   ConfigParameterName:
-    Value: !Sub '/postline/${Env}/config'
+    Value: !Sub '/ht2/${Env}/config'
   OriginSecretArn:
     Value: !Ref OriginSecret
   EraseSecretArn:

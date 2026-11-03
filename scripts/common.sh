@@ -23,12 +23,12 @@ stack_type() {
 init_env() {
   ENV=${1:?environment required}
   case "$ENV" in dev|stg|prod) ;; *) die 'env must be dev, stg or prod' ;; esac
-  : "${POSTLINE_ACCOUNT_ID:?Set the dedicated environment account ID}"
-  [[ $POSTLINE_ACCOUNT_ID =~ ^[0-9]{12}$ ]] || die 'Invalid account ID'
+  : "${HT2_ACCOUNT_ID:?Set the dedicated environment account ID}"
+  [[ $HT2_ACCOUNT_ID =~ ^[0-9]{12}$ ]] || die 'Invalid account ID'
   local actual
   actual=$(aws_text sts get-caller-identity --query Account --output text --region "$REGION")
-  [[ $actual == "$POSTLINE_ACCOUNT_ID" ]] || die 'Wrong AWS account'
-  STACK="postline-main-$ENV"
+  [[ $actual == "$HT2_ACCOUNT_ID" ]] || die 'Wrong AWS account'
+  STACK="ht2-main-$ENV"
 }
 output() {
   local value
@@ -38,11 +38,11 @@ output() {
   printf '%s' "$value"
 }
 check_stack() {
-  [[ $(output Environment) == "$ENV" && $(output AccountId) == "$POSTLINE_ACCOUNT_ID" ]] || die 'Stack environment/account mismatch'
+  [[ $(output Environment) == "$ENV" && $(output AccountId) == "$HT2_ACCOUNT_ID" ]] || die 'Stack environment/account mismatch'
 }
 require_stopped() {
   local enabled
-  enabled=$(aws_text ssm get-parameter --region "$REGION" --name "/postline/$ENV/config" \
+  enabled=$(aws_text ssm get-parameter --region "$REGION" --name "/ht2/$ENV/config" \
     --query Parameter.Value --output text)
   [[ $enabled =~ \"sending_enabled\"[[:space:]]*:[[:space:]]*false ]] || die 'sending_enabled must explicitly be false'
 }

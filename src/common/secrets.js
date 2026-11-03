@@ -22,7 +22,7 @@ export function createSecrets({ secrets, env, now = defaultNow }) {
       if (!pending.has(name)) {
         const started = now();
         pending.set(name, (async () => {
-          const response = await secrets.getSecretValue({ SecretId: `/postline/${env}/${name}` });
+          const response = await secrets.getSecretValue({ SecretId: `/ht2/${env}/${name}` });
           let value;
           try {
             const text = response.SecretString ?? new TextDecoder('utf-8', { fatal: true }).decode(response.SecretBinary);

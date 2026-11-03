@@ -143,7 +143,7 @@ async function backup(runtime) {
         const effective = applyContactMetadata(contact, saved);
         const complete = saved && saved.registration_state !== 'PENDING';
         if (!complete) missing += 1;
-        const row = { EmailAddress: effective.EmailAddress, TopicPreferences: effective.TopicPreferences ?? [], UnsubscribeAll: effective.UnsubscribeAll === true, LastUpdatedTimestamp: contact.LastUpdatedTimestamp ?? null, ...(complete ? { AttributesData: effective.AttributesData } : { PostlineMetadataStatus: 'MISSING' }) };
+        const row = { EmailAddress: effective.EmailAddress, TopicPreferences: effective.TopicPreferences ?? [], UnsubscribeAll: effective.UnsubscribeAll === true, LastUpdatedTimestamp: contact.LastUpdatedTimestamp ?? null, ...(complete ? { AttributesData: effective.AttributesData } : { HT2MetadataStatus: 'MISSING' }) };
         total += 1;
         const preferences = new Map(row.TopicPreferences.map((item) => [item.TopicName, item.SubscriptionStatus]));
         if (!row.UnsubscribeAll) for (const topic of topics) if ((preferences.get(topic.TopicName) ?? topic.DefaultSubscriptionStatus) === 'OPT_IN') counts[topic.TopicName] += 1;
@@ -186,7 +186,7 @@ async function checkStartResources(runtime, campaign) {
     const name = campaign.resume_count ? `${campaign.campaign_id}-r${campaign.resume_count}` : campaign.start_execution_name ?? campaign.campaign_id;
     if (campaign.status === 'SCHEDULED') {
       try {
-        const schedule = await runtime.scheduler.getSchedule({ Name: campaign.schedule_name ?? `pl-${name}`, GroupName: runtime.scheduleGroup });
+        const schedule = await runtime.scheduler.getSchedule({ Name: campaign.schedule_name ?? `ht2-${name}`, GroupName: runtime.scheduleGroup });
         if (!schedule || typeof schedule !== 'object') throw new Error('Invalid schedule response');
         return;
       } catch (error) { if (error.name !== 'ResourceNotFoundException') throw error; }
@@ -216,7 +216,7 @@ async function campaigns(runtime) {
       }
       if (!['COMPLETED', 'CANCELLED'].includes(campaign.status) || campaign.content_erased || !(Date.parse(campaign.completed_at) <= runtime.now() - 365 * 86400000)) continue;
       for (let rev = 1; rev <= (campaign.rev ?? 0); rev += 1) {
-        try { await runtime.ses.deleteEmailTemplate({ TemplateName: `pl-c-${campaign.campaign_id}-${rev}` }); } catch (error) { if (error.name !== 'NotFoundException') throw error; }
+        try { await runtime.ses.deleteEmailTemplate({ TemplateName: `ht2-c-${campaign.campaign_id}-${rev}` }); } catch (error) { if (error.name !== 'NotFoundException') throw error; }
       }
       const remove = ['subject', 'body_text', 'footer_text', 'from', 'reply_to', 'template_name', 'content_sha256', 'reject_reason', 'cancel_reason', 'review', 'task_token', 'test_holds', 'result_keys'].filter((field) => Object.hasOwn(campaign, field));
       await updateCampaign(runtime, campaign, [campaign.status], { content_erased: true }, remove);

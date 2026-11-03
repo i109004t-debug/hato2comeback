@@ -51,7 +51,7 @@ test('6.8 RFC 2047: 各語75文字以下でUTF-8を文字境界で分割', () =>
 });
 
 test('6.8 Fromは日本語をBエンコードし、ASCII表示名を引用', () => {
-  assert.equal(formatFrom('Postline', 'info', 'example.com'), '"Postline" <info@example.com>');
+  assert.equal(formatFrom('HT2', 'info', 'example.com'), '"HT2" <info@example.com>');
   assert.equal(formatFrom('Post\\line', 'info', 'example.com'), '"Post\\\\line" <info@example.com>');
   assert.match(formatFrom('会報', 'info', 'example.com'), /^=\?UTF-8\?B\?.+\?= <info@example.com>$/);
   for (const name of ['x\n', 'x<', 'x>', 'x"', '{{x}}', '', 'a'.repeat(65)]) assert.throws(() => formatFrom(name, 'info', 'example.com'));

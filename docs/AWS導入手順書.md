@@ -1,4 +1,4 @@
-# Postline AWS導入手順書
+# HT2 AWS導入手順書
 
 この手順書は、初めてAWSを準備する組織の責任者とAWSの管理者向けです。AWSとの契約から、[構築手順書](構築手順書.md)を始められる状態になるまでを説明します。
 
@@ -18,10 +18,10 @@
 |---|---|
 | 契約・請求の責任者 | AWSとの契約、支払い方法、費用の上限の社内承認、アカウントを回復するときの連絡先 |
 | AWSの管理者 | AWSアクセスポータルから、構築、監視、復旧を行います。DNSの担当者と連携します |
-| Postline管理者 | 運営画面の設定、同意の確認、受入記録、要確認の判断 |
+| HT2管理者 | 運営画面の設定、同意の確認、受入記録、要確認の判断 |
 | 配信担当・承認者・閲覧者 | 運営画面だけを使います。役割に応じて、配信、承認、閲覧を行います |
 
-- 1人が複数の担当を兼ねてもかまいません。ただし、AWSの権限とPostlineの役割は、別々に与えてください。
+- 1人が複数の担当を兼ねてもかまいません。ただし、AWSの権限とHT2の役割は、別々に与えてください。
 - 承認が必要な運用では、申請した人とは別の人が承認します。
 
 ### 1.2 用意するもの
@@ -37,7 +37,7 @@
 
 ## 2. AWSと契約し、請求とルートユーザーを守る
 
-1. 組織がすでにAWSを使っている場合は、AWSの管理者にPostline用のアカウントを作ってもらい、3節に進みます。新しい請求の契約を重ねて作らないでください。
+1. 組織がすでにAWSを使っている場合は、AWSの管理者にHT2用のアカウントを作ってもらい、3節に進みます。新しい請求の契約を重ねて作らないでください。
 2. 新しく契約する場合は、[AWSの登録方法の比較](https://docs.aws.amazon.com/accounts/latest/reference/sign-up-for-aws.html)を読みます。この構成では、東京と米国東部のリージョン、IAMの細かな権限、Organizationsを使います。そのため、[Sign up for AWS (advanced)](https://docs.aws.amazon.com/accounts/latest/reference/getting-started.html)の手順で登録してください。
 3. 画面の案内に従って、次の内容を登録します。
    - 組織のメールアドレス（確認のメールが届きます）
@@ -72,22 +72,22 @@
 
 ## 3. 環境を分け、AWSの管理者の入口を作る
 
-1. 契約したアカウントを、Organizationsの管理アカウントにします。すでに組織がある場合は、その組織の管理の手順に従います。Postline本体は、管理アカウントに置かないでください。
+1. 契約したアカウントを、Organizationsの管理アカウントにします。すでに組織がある場合は、その組織の管理の手順に従います。HT2本体は、管理アカウントに置かないでください。
 2. IAM Identity Centerで、組織のインスタンスを有効にします。[有効化の手順](https://docs.aws.amazon.com/singlesignon/latest/userguide/enable-identity-center.html)
    - 使うリージョン、IDの管理元、AWSアクセスポータルのURLを記録します。
    - 社内のID基盤がある場合は、その担当者と接続します。ない場合は、Identity Centerのディレクトリに個人の利用者を作ります。
    - MFAを必須にします。招待された本人が登録します。
 3. 最初の管理者のための許可セットを作り、個人に割り当てます。ルートユーザーからログアウトし、アクセスポータルから管理できることを確かめます。組織を管理する権限は、この担当者にだけ与えてください。
 4. Organizationsで「AWSアカウント」→「AWSアカウントを追加」→「AWSアカウントを作成」を開き、次の3つのアカウントを作ります。[メンバーアカウントの作成](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_accounts_create.html)
-   - `postline-dev`
-   - `postline-stg`
-   - `postline-prod`
+   - `ht2-dev`
+   - `ht2-stg`
+   - `ht2-prod`
 
    それぞれに、組織が受信して管理できる、別々のメールアドレスを使います。作ったら12桁のアカウントIDを記録します。Control Towerを使っている場合は、そのAccount Factoryで作ります。
 5. Identity Centerで構築担当者のグループを作り、各アカウントに構築用の許可セットを割り当てます。
    - すでに承認されたデプロイ用の権限があれば、それを使います。
    - 最初の構築で `AdministratorAccess` を使う場合は、契約の責任者が指名したAWSの構築担当だけに、一時的な許可セットとして与えます。セッションの時間は短くしてください。この権限では、IAMや秘密情報も操作できます。
-   - Postlineのスタッフには、この権限を与えないでください。
+   - HT2のスタッフには、この権限を与えないでください。
    - 構築が終わったら、閲覧、緊急停止、構成の更新の権限を、必要な担当に分けます。いらなくなった管理者の割り当ては消してください。
 6. CloudTrailで、すべてのリージョンを対象にした組織の証跡を作ります。[組織の証跡の作成](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/creating-trail-organization.html)
    - 管理イベントとログファイルの検証を有効にします。
@@ -118,30 +118,30 @@
 Windowsでは、Git Bashを使ってください。同じシェルで `aws --version`、`node --version`、`bash --version` が成功することを確かめます。リポジトリに外部のパッケージを追加したり、`npm install` を実行したりしないでください。
 
 ```bash
-aws configure sso --profile postline-dev-admin
+aws configure sso --profile ht2-dev-admin
 ```
 
 ウィザードでは、次の値を指定します。ブラウザでの認証のあと、必ず対象の環境のアカウントと許可セットを選んでください。
 
 | 入力 | 指定する値 |
 |---|---|
-| SSO session name | 組織の中で見分けられる名前。例 `postline-admin` |
+| SSO session name | 組織の中で見分けられる名前。例 `ht2-admin` |
 | SSO start URL | 3節で記録したAWSアクセスポータルのURL |
 | SSO region | Identity Centerを有効にしたリージョン。デプロイ先のリージョンとは別の設定です |
 | Registration scopes | `sso:account:access` |
 | Account / role | devのアカウントID / 構築用の許可セット |
 | Default client Region / output | `ap-northeast-1` / `json` |
 
-同じ手順で、`postline-stg-admin` と `postline-prod-admin` も作ります。既存のSSOセッションを選んでもかまいません。[CLIのSSO設定](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html)
+同じ手順で、`ht2-stg-admin` と `ht2-prod-admin` も作ります。既存のSSOセッションを選んでもかまいません。[CLIのSSO設定](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html)
 
 作業を始めるたびに、次のコマンドを実行します。
 
 ```bash
-aws sso login --profile postline-dev-admin
-export AWS_PROFILE=postline-dev-admin
+aws sso login --profile ht2-dev-admin
+export AWS_PROFILE=ht2-dev-admin
 export AWS_REGION=ap-northeast-1
 export AWS_PAGER="" AWS_MAX_ATTEMPTS=1 AWS_CLI_FILE_ENCODING=UTF-8
-export POSTLINE_ACCOUNT_ID=111111111111
+export HT2_ACCOUNT_ID=111111111111
 umask 077
 aws sts get-caller-identity
 ```
@@ -182,7 +182,7 @@ SESのDKIM、MAIL FROM、SPF、DMARCのレコードは、スタックを構築�
 次はdevの例です。バケット名は世界中で重ならない名前にする必要があるので、実際の値に変えてください。
 
 ```bash
-export ARTIFACT_BUCKET=postline-yourorg-artifacts-dev-111111111111
+export ARTIFACT_BUCKET=ht2-yourorg-artifacts-dev-111111111111
 mkdir -p build
 aws sts get-caller-identity
 aws s3api create-bucket --region ap-northeast-1 --bucket "$ARTIFACT_BUCKET" \
@@ -215,7 +215,7 @@ aws s3api get-bucket-policy-status --region ap-northeast-1 --bucket "$ARTIFACT_B
 - 許可するのは、構築担当のIAMロールだけにします。全員を許可する Allow は追加しないでください。
 - デプロイの成果物は、変更セットや稼働中の版との対応を残します。使っている成果物は消さないでください。[バケットの作成と権限](https://docs.aws.amazon.com/cli/latest/reference/s3api/create-bucket.html)
 
-## 7. Postlineを構築し、利用開始を引き継ぐ
+## 7. HT2を構築し、利用開始を引き継ぐ
 
 dev、stg、prodの順に、[構築手順書](構築手順書.md)を最初から実施します。この手順書で初めて作るサービスは、CloudFormationがまとめて作ります。LambdaやDynamoDBなどを、コンソールで先に個別に作らないでください。
 
@@ -233,7 +233,7 @@ dev、stg、prodの順に、[構築手順書](構築手順書.md)を最初から
 
 - SESのサンドボックスは、アカウントとリージョンごとに分かれています。サンドボックスでは、認証済みの宛先とシミュレーターにしか送れません。
 - AWSに本番利用を申請しても、承認や希望どおりの送信枠が約束されるわけではありません。
-- 送信元の認証、申請の承認、Postlineの受入合格は、それぞれ別に確かめてください。
+- 送信元の認証、申請の承認、HT2の受入合格は、それぞれ別に確かめてください。
 - 承認を待たずに、一般の会員をテスト送信先にして送らないでください。[SESの本番利用の申請](https://docs.aws.amazon.com/ses/latest/dg/request-production-access.html)
 
 導入担当者は、次の情報を公開しない運用台帳に記録します。パスワードやMFAの秘密は書かないでください。

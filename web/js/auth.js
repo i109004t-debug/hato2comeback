@@ -1,5 +1,5 @@
-const SESSION_KEY = 'pl_session';
-const PKCE_KEY = 'pl_pkce';
+const SESSION_KEY = 'ht2_session';
+const PKCE_KEY = 'ht2_pkce';
 
 export function base64url(bytes) {
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');

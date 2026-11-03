@@ -20,10 +20,10 @@ mock_aws() {
         *"OutputKey=='Environment'"*) printf 'dev\n' ;;
         *"OutputKey=='AccountId'"*) printf '111111111111\n' ;;
         *"OutputKey=='CertificateArn'"*) printf 'arn:aws:acm:us-east-1:111111111111:certificate/00000000-0000-0000-0000-000000000000\n' ;;
-        *"OutputKey=='WebAclArn'"*) printf 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/postline-dev/00000000-0000-0000-0000-000000000000\n' ;;
+        *"OutputKey=='WebAclArn'"*) printf 'arn:aws:wafv2:us-east-1:111111111111:global/webacl/ht2-dev/00000000-0000-0000-0000-000000000000\n' ;;
         *"OutputKey=='WebBucketName'"*) printf 'example-web\n' ;;
         *"OutputKey=='DistributionId'"*) printf 'EXAMPLEDIST\n' ;;
-        *"OutputKey=='AuthDomain'"*) printf 'https://postline-example-dev.auth.ap-northeast-1.amazoncognito.com\n' ;;
+        *"OutputKey=='AuthDomain'"*) printf 'https://ht2-example-dev.auth.ap-northeast-1.amazoncognito.com\n' ;;
         *"OutputKey=='WebClientId'"*) printf 'exampleclient123\n' ;;
         *"OutputKey=='UserPoolId'"*) printf 'ap-northeast-1_example\n' ;;
         *"OutputKey=='RedirectUri'"*) printf 'https://app.dev.example.jp/callback.html\n' ;;
@@ -31,7 +31,7 @@ mock_aws() {
         *"OutputKey=='ApiBaseUrl'"*) printf '/api/v1\n' ;;
         *"OutputKey=='SenderDomainName'"*) printf 'fc.dev.example.jp\n' ;;
         *"OutputKey=='DataBucketName'"*) printf 'example-data\n' ;;
-        *"OutputKey=='ContactListName'"*) printf 'postline\n' ;;
+        *"OutputKey=='ContactListName'"*) printf 'ht2\n' ;;
         *) printf 'unexpected mock query: %s\n' "$args" >&2; return 99 ;;
       esac ;;
     'cloudformation describe-change-set')
@@ -68,9 +68,9 @@ mock_aws() {
     'sesv2 get-contact')
       [[ ${MOCK_CONTACT_ERROR:-0} == 0 ]] || return 254
       if [[ ${MOCK_CONTACT_NO_ATTR:-0} == 1 ]]; then
-        printf '{"ContactListName":"postline","EmailAddress":"member@example.jp","TopicPreferences":[]}\n'
+        printf '{"ContactListName":"ht2","EmailAddress":"member@example.jp","TopicPreferences":[]}\n'
       else
-        printf '%s\n' '{"ContactListName":"postline","EmailAddress":"member@example.jp","TopicPreferences":[{"TopicName":"kaiho","SubscriptionStatus":"OPT_OUT"},{"TopicName":"event","SubscriptionStatus":"OPT_IN"}],"AttributesData":"{\"name\":\"会員\",\"consent\":{\"source\":\"入会\"}}"}'
+        printf '%s\n' '{"ContactListName":"ht2","EmailAddress":"member@example.jp","TopicPreferences":[{"TopicName":"kaiho","SubscriptionStatus":"OPT_OUT"},{"TopicName":"event","SubscriptionStatus":"OPT_IN"}],"AttributesData":"{\"name\":\"会員\",\"consent\":{\"source\":\"入会\"}}"}'
       fi ;;
     'sesv2 update-contact') ;;
     *) printf 'Unexpected mock AWS call: %s\n' "$args" >&2; return 99 ;;

@@ -2,7 +2,7 @@ import { AppError } from './http.js';
 import { createTime } from './time.js';
 
 export function monitoringAlarmNames(env) {
-  return ['firehose-delivery', 'firehose-freshness', 'rendering-or-reject'].map((name) => `postline-${env}-${name}`);
+  return ['firehose-delivery', 'firehose-freshness', 'rendering-or-reject'].map((name) => `ht2-${env}-${name}`);
 }
 
 export function assertHealthy(condition, code) {

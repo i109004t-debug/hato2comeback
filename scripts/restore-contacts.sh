@@ -7,20 +7,20 @@ check_stack
 require_stopped
 BUCKET=$(output DataBucketName)
 LIST=$(output ContactListName)
-API_FUNCTION="postline-$ENV-api"
+API_FUNCTION="ht2-$ENV-api"
 OWNER="restore:$ENV"
 LOCK_KEY='{"PK":{"S":"LOCK"},"SK":{"S":"CONTACT_CREATE"}}'
 frozen() {
   local concurrency owner
   concurrency=$(aws_text lambda get-function-concurrency --region "$REGION" --function-name "$API_FUNCTION" --query ReservedConcurrentExecutions --output text)
   [[ $concurrency == 0 ]] || die 'Freeze the management API first (new registrations/imports must be blocked)'
-  owner=$(aws_text dynamodb get-item --region "$REGION" --table-name "postline-$ENV" --consistent-read --key "$LOCK_KEY" --query Item.owner.S --output text)
+  owner=$(aws_text dynamodb get-item --region "$REGION" --table-name "ht2-$ENV" --consistent-read --key "$LOCK_KEY" --query Item.owner.S --output text)
   [[ $owner == "$OWNER" ]] || die 'Restore must own CONTACT_CREATE; reconcile existing jobs first'
 }
 case "${2:-}" in
   freeze)
     aws lambda put-function-concurrency --region "$REGION" --function-name "$API_FUNCTION" --reserved-concurrent-executions 0
-    aws dynamodb update-item --region "$REGION" --table-name "postline-$ENV" --key "$LOCK_KEY" \
+    aws dynamodb update-item --region "$REGION" --table-name "ht2-$ENV" --key "$LOCK_KEY" \
       --update-expression 'SET #owner = :owner, #state = :state' --condition-expression 'attribute_not_exists(#owner) OR #owner = :owner' \
       --expression-attribute-names '{"#owner":"owner","#state":"state"}' \
       --expression-attribute-values "{\":owner\":{\"S\":\"$OWNER\"},\":state\":{\"S\":\"RESTORING\"}}" >/dev/null
@@ -40,12 +40,12 @@ case "${2:-}" in
       printf '{"complete":false,"legacy":true,"reason":"MANIFEST_MISSING"}\n' > "$DIR/contacts.manifest.json"
       printf 'Legacy backup: attribute completeness is unknown. Reconcile CONTACT_META and evidence before restoring.\n' >&2
     fi
-    aws dynamodb query --region "$REGION" --table-name "postline-$ENV" --consistent-read \
+    aws dynamodb query --region "$REGION" --table-name "ht2-$ENV" --consistent-read \
       --key-condition-expression 'PK = :pk' --expression-attribute-values '{":pk":{"S":"CONTACT_META"}}' --output json > "$DIR/contact-metadata.json"
     aws s3 cp "s3://$BUCKET/imports/ready/" "$DIR/imports/" --recursive --region "$REGION"
-    aws dynamodb query --region "$REGION" --table-name "postline-$ENV" --consistent-read \
+    aws dynamodb query --region "$REGION" --table-name "ht2-$ENV" --consistent-read \
       --key-condition-expression 'PK = :pk' --expression-attribute-values "{\":pk\":{\"S\":\"AUDIT#$MONTH\"}}" --output json > "$DIR/audit-$MONTH.json"
-    aws dynamodb query --region "$REGION" --table-name "postline-$ENV" --consistent-read \
+    aws dynamodb query --region "$REGION" --table-name "ht2-$ENV" --consistent-read \
       --key-condition-expression 'PK = :pk' --expression-attribute-values '{":pk":{"S":"ERASED"}}' --output json > "$DIR/erased.json"
     aws sesv2 list-contacts --region "$REGION" --contact-list-name "$LIST" --output json > "$DIR/current-contacts.json"
     printf 'Exported %s. Repeat export for every audit month. Reconcile attributes/HMAC erasures, latest SES stops and deduplicated Subscription transitions with Athena; review the CSV and evidence before import.\n' "$DIR"
@@ -55,7 +55,7 @@ case "${2:-}" in
     CSV=${3:?reviewed SES CSV file}; REVIEW=${4:?review evidence S3 key}
     [[ -f $CSV && $REVIEW == delivery-checks/* ]] || die 'Reviewed CSV and private evidence key required'
     aws s3api head-object --region "$REGION" --bucket "$BUCKET" --key "$REVIEW" --query ContentLength >/dev/null
-    wait_input "Confirm erased HMAC exclusion, attributes, consent, latest SES stops/suppression and stop deltas through now. Type: restore $POSTLINE_ACCOUNT_ID $ENV" "restore $POSTLINE_ACCOUNT_ID $ENV"
+    wait_input "Confirm erased HMAC exclusion, attributes, consent, latest SES stops/suppression and stop deltas through now. Type: restore $HT2_ACCOUNT_ID $ENV" "restore $HT2_ACCOUNT_ID $ENV"
     KEY="imports/ready/restore-$EPOCHSECONDS.csv"
     aws s3 cp "$CSV" "s3://$BUCKET/$KEY" --region "$REGION" --content-type 'text/csv; charset=utf-8'
     # 結果不明でも同じジョブを自動作成しない。CloudTrailで照合する。
@@ -96,8 +96,8 @@ case "${2:-}" in
     REVIEW=${3:?final evidence key}
     [[ $REVIEW == delivery-checks/* ]] || die 'Private evidence key required'
     aws s3api head-object --region "$REGION" --bucket "$BUCKET" --key "$REVIEW" --query ContentLength >/dev/null
-    wait_input "Confirm import completion, repeated delayed-stop reconciliation, erasure/suppression/attributes checks and administrator record. Keep sending disabled. Type: release $POSTLINE_ACCOUNT_ID $ENV" "release $POSTLINE_ACCOUNT_ID $ENV"
-    aws dynamodb update-item --region "$REGION" --table-name "postline-$ENV" --key "$LOCK_KEY" \
+    wait_input "Confirm import completion, repeated delayed-stop reconciliation, erasure/suppression/attributes checks and administrator record. Keep sending disabled. Type: release $HT2_ACCOUNT_ID $ENV" "release $HT2_ACCOUNT_ID $ENV"
+    aws dynamodb update-item --region "$REGION" --table-name "ht2-$ENV" --key "$LOCK_KEY" \
       --update-expression 'REMOVE #owner, #state' --condition-expression '#owner = :owner' \
       --expression-attribute-names '{"#owner":"owner","#state":"state"}' \
       --expression-attribute-values "{\":owner\":{\"S\":\"$OWNER\"}}" >/dev/null

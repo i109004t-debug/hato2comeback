@@ -88,7 +88,7 @@ test('7.1 予約作成の応答消失後に予約が発火・自動削除され�
 
 test('7.1 予約作成失敗の照合で異なる予約が見つかっても承認済みへ戻さない', async () => {
   const f = managementFixture(); f.setCampaign({ status: 'APPROVED' });
-  f.schedules.set(`pl-${ID}`, { ScheduleExpression: 'at(2027-01-01T00:00:00)' });
+  f.schedules.set(`ht2-${ID}`, { ScheduleExpression: 'at(2027-01-01T00:00:00)' });
   assert.equal((await f.request(`POST ${f.campaignPath}/start`, request('SCHEDULED'))).statusCode, 409);
   assert.equal(f.getCampaign().status, 'SCHEDULED');
 });
@@ -115,7 +115,7 @@ for (const mode of ['NOW', 'SCHEDULED']) {
     assert.equal((await f.request(`POST ${f.campaignPath}/start`, request(mode))).statusCode, 503);
     service[operation] = create;
     if (mode === 'NOW') f.executions.set(ID, { input: JSON.stringify({ campaign_id: ID }) });
-    else f.schedules.set(`pl-${ID}`, {});
+    else f.schedules.set(`ht2-${ID}`, {});
     assert.equal((await f.request(`POST ${f.campaignPath}/start`, request(mode))).statusCode, 409);
     assert.equal(f.getCampaign().start_attempt, 1);
   });
@@ -143,7 +143,7 @@ test('13.4 正常な開始待ちと将来の予約、発火後の予約自動削
   for (const kind of ['execution', 'schedule', 'fired']) {
     const f = managementFixture({ count: 0 });
     f.setCampaign({ status: kind === 'execution' ? 'QUEUED' : 'SCHEDULED' });
-    if (kind === 'schedule') f.schedules.set(`pl-${ID}`, { ScheduleExpression: 'at(2026-11-04T19:05:00)' });
+    if (kind === 'schedule') f.schedules.set(`ht2-${ID}`, { ScheduleExpression: 'at(2026-11-04T19:05:00)' });
     else f.executions.set(ID, { input: JSON.stringify({ campaign_id: ID }) });
     f.advance(900000);
     assert.equal((await f.worker({ mode: 'daily' }, f.context)).results.campaigns, 'PASS');

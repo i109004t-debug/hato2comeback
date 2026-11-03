@@ -3,9 +3,9 @@ set -euo pipefail
 source "${BASH_SOURCE[0]%/*}/common.sh"
 init_env "${1:?Usage: bash scripts/deploy.sh ENV prepare|execute [change-set-name]}"
 ACTION=${2:-prepare}
-PARAMS=${POSTLINE_PARAMS:-build/$ENV.params.json}
+PARAMS=${HT2_PARAMS:-build/$ENV.params.json}
 [[ -f $PARAMS ]] || die "Create $PARAMS from infra/params/$ENV.json and review its values"
-CHANGE_SET=${3:-postline-$ENV-$EPOCHSECONDS}
+CHANGE_SET=${3:-ht2-$ENV-$EPOCHSECONDS}
 [[ $CHANGE_SET =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]] || die 'Invalid change set name'
 review_topics() {
   local mode=$1 name old names=() changes
@@ -32,7 +32,7 @@ review_topics() {
     # --output textはタブ区切り。配列へ明示的に分解する。
     local joined=" ${names[*]} " old_topics
     joined=${joined//$'\t'/ }
-    old_topics=$(aws_text sesv2 get-contact-list --region "$REGION" --contact-list-name postline --query 'Topics[].TopicName' --output text)
+    old_topics=$(aws_text sesv2 get-contact-list --region "$REGION" --contact-list-name ht2 --query 'Topics[].TopicName' --output text)
     for old in $old_topics; do
       [[ $joined == *" $old "* ]] || die "WARNING: Topic removal ($old); stopped. Retain does not preserve topic subscriptions."
     done
@@ -58,12 +58,12 @@ case "$ACTION" in
     status=$(aws_text cloudformation list-stacks --region "$REGION" \
       --query "StackSummaries[?StackName=='$STACK' && StackStatus!='DELETE_COMPLETE'].StackStatus | [0]" --output text)
     TYPE=$(stack_type "$status")
-    aws_text ssm get-parameter --region "$REGION" --name "/postline/$ENV/config" --query Parameter.Version --output text > /dev/null
-    [[ $(output Environment "postline-edge-$ENV" us-east-1) == "$ENV" && $(output AccountId "postline-edge-$ENV" us-east-1) == "$POSTLINE_ACCOUNT_ID" ]] || die 'Edge stack environment/account mismatch'
-    CERT=$(output CertificateArn "postline-edge-$ENV" us-east-1)
-    ACL=$(output WebAclArn "postline-edge-$ENV" us-east-1)
-    [[ $CERT =~ ^arn:aws:acm:us-east-1:$POSTLINE_ACCOUNT_ID:certificate/[a-f0-9-]{36}$ ]] || die 'Invalid edge certificate ARN'
-    [[ $ACL =~ ^arn:aws:wafv2:us-east-1:$POSTLINE_ACCOUNT_ID:global/webacl/[A-Za-z0-9_-]+/[a-f0-9-]{36}$ ]] || die 'Invalid edge WAF ARN'
+    aws_text ssm get-parameter --region "$REGION" --name "/ht2/$ENV/config" --query Parameter.Version --output text > /dev/null
+    [[ $(output Environment "ht2-edge-$ENV" us-east-1) == "$ENV" && $(output AccountId "ht2-edge-$ENV" us-east-1) == "$HT2_ACCOUNT_ID" ]] || die 'Edge stack environment/account mismatch'
+    CERT=$(output CertificateArn "ht2-edge-$ENV" us-east-1)
+    ACL=$(output WebAclArn "ht2-edge-$ENV" us-east-1)
+    [[ $CERT =~ ^arn:aws:acm:us-east-1:$HT2_ACCOUNT_ID:certificate/[a-f0-9-]{36}$ ]] || die 'Invalid edge certificate ARN'
+    [[ $ACL =~ ^arn:aws:wafv2:us-east-1:$HT2_ACCOUNT_ID:global/webacl/[A-Za-z0-9_-]+/[a-f0-9-]{36}$ ]] || die 'Invalid edge WAF ARN'
     PARAMETER_TEXT=$(< "$PARAMS")
     [[ $PARAMETER_TEXT == *REPLACE_WITH_EDGE_CERTIFICATE_ARN* && $PARAMETER_TEXT == *REPLACE_WITH_EDGE_WEB_ACL_ARN* ]] || die 'Keep edge ARN placeholders in the main parameters; values come from the edge stack'
     PARAMETER_TEXT=${PARAMETER_TEXT//REPLACE_WITH_EDGE_CERTIFICATE_ARN/$CERT}
@@ -72,10 +72,10 @@ case "$ACTION" in
     PARAMS="build/$ENV.main.resolved.params.json"
     printf '%s\n' "$PARAMETER_TEXT" > "$PARAMS"
     aws cloudformation package --region "$REGION" --template-file infra/template.yaml --s3-bucket "$ARTIFACT_BUCKET" \
-      --s3-prefix "postline/$ENV" --output-template-file build/template.out.yaml
-    aws s3 cp build/template.out.yaml "s3://$ARTIFACT_BUCKET/postline/$ENV/$CHANGE_SET.yaml" --region "$REGION"
+      --s3-prefix "ht2/$ENV" --output-template-file build/template.out.yaml
+    aws s3 cp build/template.out.yaml "s3://$ARTIFACT_BUCKET/ht2/$ENV/$CHANGE_SET.yaml" --region "$REGION"
     aws cloudformation create-change-set --region "$REGION" --stack-name "$STACK" --change-set-name "$CHANGE_SET" \
-      --change-set-type "$TYPE" --template-url "https://$ARTIFACT_BUCKET.s3.$REGION.amazonaws.com/postline/$ENV/$CHANGE_SET.yaml" \
+      --change-set-type "$TYPE" --template-url "https://$ARTIFACT_BUCKET.s3.$REGION.amazonaws.com/ht2/$ENV/$CHANGE_SET.yaml" \
       --parameters "file://$PARAMS" --capabilities CAPABILITY_NAMED_IAM
     aws cloudformation wait change-set-create-complete --region "$REGION" --stack-name "$STACK" --change-set-name "$CHANGE_SET"
     review_topics "$TYPE"

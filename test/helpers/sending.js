@@ -7,7 +7,7 @@ import { createHandler } from '../../src/worker/handler.js';
 
 export const ID = '01K9542S00AAAAAAAAAAAAAAAA';
 export const ID2 = '01K9542S00BBBBBBBBBBBBBBBB';
-export const ARN = 'arn:aws:states:ap-northeast-1:123456789012:execution:postline:test';
+export const ARN = 'arn:aws:states:ap-northeast-1:123456789012:execution:ht2:test';
 export const failure = (name, status, message = name) => Object.assign(new Error(message), { name, ...(status ? { $metadata: { httpStatusCode: status } } : {}) });
 
 function expression(input, item) {
@@ -131,8 +131,8 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
   const settings = { ...configDefaults(env), sending_enabled: true, nonprod_allowlist: addresses, batch_size: batchSize, progress_every: Math.min(20, batchSize), daily_send_cap: cap };
   const org = { PK: 'SETTINGS', SK: 'ORG', from_local: 'info', from_name: '会報', reply_to: 'support@example.com', legal: { sender_name: '会', address: '東京', contact: 'https://example.com' }, max_rate_per_sec: 10, version: 0, test_recipients: addresses.slice(0, 5) };
   const deps = {
-    env, region: 'ap-northeast-1', accountId: '123456789012', senderDomain: 'example.com', contactList: 'postline', configSet: `postline-${env}`, dataBucket: 'data', tableName: 'postline',
-    eventStreamArn: 'arn:aws:firehose:ap-northeast-1:123456789012:deliverystream/postline',
+    env, region: 'ap-northeast-1', accountId: '123456789012', senderDomain: 'example.com', contactList: 'ht2', configSet: `ht2-${env}`, dataBucket: 'data', tableName: 'ht2',
+    eventStreamArn: 'arn:aws:firehose:ap-northeast-1:123456789012:deliverystream/ht2',
     now: () => clock, sleep: async (ms) => { sleeps.push(ms); clock += ms; await f.onSleep?.(ms); }, random: () => 0,
     ddb, config: { get: async () => structuredClone(settings) },
     metrics: { emit: (name, value, dimensions) => metrics.push({ name, value, dimensions }) },
@@ -187,7 +187,7 @@ export function fixture({ count = 45, env = 'stg', batchSize = 200, cap = 1000, 
   f.delivery = { status: 'PASS', passed_at: new Date(clock).toISOString(), by: 'admin', note: '承認上限はSSMの日次上限。観測不足を確認済み。', evidence_key: 'delivery-checks/check/evidence.json', cases: Object.fromEntries(DELIVERY_CASES.map((id) => [id, 'PASS'])), config_hash: f.configHash, dns_config_hash: f.auth.dns_config_hash };
   if (env === 'prod') { org.delivery_check = f.delivery; files.set(f.delivery.evidence_key, '{}'); }
   ddb.set(org); ddb.set(f.auth);
-  ddb.set({ PK: 'CAMPAIGN', SK: ID, campaign_id: ID, status: 'QUEUED', version: 0, topic: 'news', from: '=?UTF-8?B?5Lya5aCx?= <info@example.com>', reply_to: org.reply_to, template_name: `pl-c-${ID}-1`, created_at: new Date(clock).toISOString() });
+  ddb.set({ PK: 'CAMPAIGN', SK: ID, campaign_id: ID, status: 'QUEUED', version: 0, topic: 'news', from: '=?UTF-8?B?5Lya5aCx?= <info@example.com>', reply_to: org.reply_to, template_name: `ht2-c-${ID}-1`, created_at: new Date(clock).toISOString() });
   f.store = createDdb(deps);
   f.handler = createHandler(deps);
   f.prepare = (extra) => f.handler(f.event('prepare', extra), f.context);

@@ -9,7 +9,7 @@ test('12.7 SSM設定JSONを30秒キャッシュし、変更の反映・参照の
   let enabled = true;
   const config = createConfig({ env: 'prod', now: () => time, ssm: { getParameter: async (input) => {
     calls += 1;
-    assert.equal(input.Name, '/postline/prod/config');
+    assert.equal(input.Name, '/ht2/prod/config');
     return { Parameter: { Value: JSON.stringify({ sending_enabled: enabled }) } };
   } } });
   const [a, b] = await Promise.all([config.get(), config.get()]);

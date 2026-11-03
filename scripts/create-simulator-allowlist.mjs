@@ -9,7 +9,7 @@ for (let i = 0; i < args.length; i += 2) {
 }
 const count = Number(options['--count']);
 if (!Number.isSafeInteger(count) || count < 1 || count > 20000 || !options['--output']) throw new Error('Count must be 1..20000 and --output is required');
-const addresses = Array.from({ length: count }, (_, index) => `success+postline${String(index + 1).padStart(5, '0')}@simulator.amazonses.com`);
+const addresses = Array.from({ length: count }, (_, index) => `success+ht2${String(index + 1).padStart(5, '0')}@simulator.amazonses.com`);
 const output = resolve(options['--output']);
 // 既存のファイルを上書きせず、AWSには接続しない。
 await writeFile(output, JSON.stringify(addresses) + '\n', { flag: 'wx', encoding: 'utf8' });

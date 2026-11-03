@@ -9,7 +9,7 @@ import { validateConfig } from '../../src/common/config.js';
 
 test('simulator generator creates a valid ten-thousand-address allowlist and refuses overwrites', () => {
   const parent = resolve(tmpdir());
-  const directory = mkdtempSync(join(parent, 'postline-allowlist-'));
+  const directory = mkdtempSync(join(parent, 'ht2-allowlist-'));
   const file = join(directory, 'allowlist.json');
   const script = fileURLToPath(new URL('../../scripts/create-simulator-allowlist.mjs', import.meta.url));
   const run = (count) => spawnSync(process.execPath, [script, '--count', String(count), '--output', file], { encoding: 'utf8' });
@@ -20,7 +20,7 @@ test('simulator generator creates a valid ten-thousand-address allowlist and ref
     const addresses = JSON.parse(before);
     assert.equal(validateConfig({ nonprod_allowlist: addresses }, 'stg').nonprod_allowlist.length, 10000);
     assert.equal(new Set(addresses).size, 10000);
-    assert.ok(addresses.every((address) => /^success\+postline\d+@simulator\.amazonses\.com$/.test(address)));
+    assert.ok(addresses.every((address) => /^success\+ht2\d+@simulator\.amazonses\.com$/.test(address)));
     assert.equal(run(1).status, 1);
     assert.equal(readFileSync(file, 'utf8'), before);
   } finally {

@@ -127,7 +127,7 @@ test('13.2 全アプリメトリクスをEMFで出力し、機密情報を次元
     const dimensions = name === 'Paused' ? { Reason: 'USER' } : name.startsWith('Api') ? { Route: 'API-01' } : {};
     const entry = metrics.emit(name, 1, dimensions);
     assert.equal(entry._aws.Timestamp, 1000);
-    assert.equal(entry._aws.CloudWatchMetrics[0].Namespace, 'Postline/prod');
+    assert.equal(entry._aws.CloudWatchMetrics[0].Namespace, 'HT2/prod');
     assert.equal(entry._aws.CloudWatchMetrics[0].Metrics[0].Unit, METRIC_UNITS[name]);
     assert.equal(entry[name], 1);
   }
@@ -154,7 +154,7 @@ test('13.1〜13.2 既定出力はconsoleのJSON包絡を通さずstdoutへ1行�
   assert.equal(result.status, 0, result.stderr);
   const lines = result.stdout.trimEnd().split('\n').map((line) => JSON.parse(line));
   assert.equal(lines.length, 2);
-  assert.equal(lines[0]._aws.CloudWatchMetrics[0].Namespace, 'Postline/dev');
+  assert.equal(lines[0]._aws.CloudWatchMetrics[0].Namespace, 'HT2/dev');
   assert.equal(lines[0].message, undefined);
   assert.equal(lines[1].level, 'info');
   assert.equal(lines[1].msg, '[REDACTED_EMAIL]');

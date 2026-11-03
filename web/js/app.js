@@ -130,7 +130,7 @@ export async function boot({ doc = document, location = window.location, history
         if (link.hash === `#/${selected.view}`) link.setAttribute('aria-current', 'page');
         else link.removeAttribute('aria-current');
       }
-      doc.title = `Postline｜${{ send: '配信', contacts: '宛先', history: '配信履歴', settings: '設定' }[selected.view]}`;
+      doc.title = `HT2｜${{ send: '配信', contacts: '宛先', history: '配信履歴', settings: '設定' }[selected.view]}`;
       await { send, contacts, history, settings }[selected.view].mount(ctx, selected.id);
       if (current !== sequence) return;
       root.setAttribute('aria-busy', 'false');

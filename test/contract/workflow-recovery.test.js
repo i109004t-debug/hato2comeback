@@ -9,7 +9,7 @@ const expectCode = (response, status, code) => {
   assert.equal(response.statusCode, status, response.body);
   assert.equal(response.json.error_code, code);
 };
-const arn = (name) => `arn:aws:states:ap-northeast-1:123456789012:execution:postline:${name}`;
+const arn = (name) => `arn:aws:states:ap-northeast-1:123456789012:execution:ht2:${name}`;
 const completed = (status = 'SUCCEEDED', action = 'START_FAILED') => ({ status, input: JSON.stringify({ campaign_id: ID }), output: JSON.stringify({ campaign_id: ID, result: { action } }) });
 
 function recoveryFixture(options = {}) {
@@ -110,7 +110,7 @@ async function failStart(mode = 'NOW') {
   const response = await f.request(`POST ${f.campaignPath}/start`, request);
   assert.equal(response.statusCode, 200, response.body);
   if (mode === 'SCHEDULED') {
-    const target = JSON.parse(f.schedules.get(`pl-${ID}`).Target.Input);
+    const target = JSON.parse(f.schedules.get(`ht2-${ID}`).Target.Input);
     await f.deps.sfn.startExecution({ name: target.Name, stateMachineArn: target.StateMachineArn, input: target.Input });
   }
   f.identity.VerifiedForSendingStatus = false;
@@ -132,7 +132,7 @@ for (const mode of ['NOW', 'SCHEDULED']) {
     assert.equal(f.getCampaign().start_error, '');
     if (mode === 'NOW') assert.ok(f.executions.has(`${ID}-s2`));
     else {
-      const target = JSON.parse(f.schedules.get(`pl-${ID}-s2`).Target.Input);
+      const target = JSON.parse(f.schedules.get(`ht2-${ID}-s2`).Target.Input);
       assert.equal(target.Name, `${ID}-s2`);
       await f.deps.sfn.startExecution({ name: target.Name, stateMachineArn: target.StateMachineArn, input: target.Input });
     }
@@ -189,8 +189,8 @@ test('7.1 予約取り消し後に遅れて届いた旧実行は新しい予約�
 
 test('7.1 更新前の予約を取り消した記録でも旧実行名を再利用しない', async () => {
   const f = managementFixture();
-  f.setCampaign({ status: 'SCHEDULED', start_mode: 'SCHEDULED', schedule_name: `pl-${ID}`, scheduled_at: '2026-11-04T10:05:00Z' });
-  f.schedules.set(`pl-${ID}`, {});
+  f.setCampaign({ status: 'SCHEDULED', start_mode: 'SCHEDULED', schedule_name: `ht2-${ID}`, scheduled_at: '2026-11-04T10:05:00Z' });
+  f.schedules.set(`ht2-${ID}`, {});
   assert.equal((await f.request(`POST ${f.campaignPath}/unschedule`, {})).statusCode, 200);
   const response = await f.request(`POST ${f.campaignPath}/start`, { mode: 'SCHEDULED', at: '2026-11-05T19:05:00+09:00' });
   assert.equal(response.statusCode, 200, response.body);

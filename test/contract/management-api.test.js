@@ -88,7 +88,7 @@ test('6.4 テンプレート作成だけ成功した後の再申請は内容一�
   expectCode(await f.request(`POST ${f.campaignPath}/submit`, {}), 500, 'INTERNAL');
   f.deps.ses.createEmailTemplate = create;
   assert.equal((await f.request(`POST ${f.campaignPath}/submit`, {})).statusCode, 200);
-  const g = managementFixture(); g.draft(); g.templates.set(`pl-c-${ID}-1`, { Subject: '別の件名', Text: '別の本文' });
+  const g = managementFixture(); g.draft(); g.templates.set(`ht2-c-${ID}-1`, { Subject: '別の件名', Text: '別の本文' });
   expectCode(await g.request(`POST ${g.campaignPath}/submit`, {}), 409, 'HASH_MISMATCH');
 });
 
@@ -134,7 +134,7 @@ test('7.1 予約は東京時刻・無再試行・自動削除・00分の注意�
   expectCode(await f.request(`POST ${f.campaignPath}/start`, { mode: 'SCHEDULED', at: new Date(f.deps.now() + 299999).toISOString() }), 400, 'INVALID_REQUEST');
   const response = await f.request(`POST ${f.campaignPath}/start`, { mode: 'SCHEDULED', at: '2026-11-04T19:00:00+09:00' });
   assert.equal(response.statusCode, 200, response.body); assert.ok(response.json.warnings.includes('ON_THE_HOUR'));
-  const schedule = f.schedules.get(`pl-${ID}`);
+  const schedule = f.schedules.get(`ht2-${ID}`);
   assert.equal(schedule.ScheduleExpression, 'at(2026-11-04T19:00:00)'); assert.equal(schedule.ScheduleExpressionTimezone, 'Asia/Tokyo');
   assert.equal(schedule.ActionAfterCompletion, 'DELETE'); assert.equal(schedule.Target.RetryPolicy.MaximumRetryAttempts, 0);
   assert.equal((await f.request(`POST ${f.campaignPath}/unschedule`, {})).json.status, 'APPROVED');
@@ -202,7 +202,7 @@ test('7.7 全件進捗保存後の異常では空の要確認範囲を安全に�
   f.setCampaign({ status: 'NEEDS_REVIEW', chunks_total: 1, recipients_total: 3, progress: { chunk: 1, index: 0 }, review: { chunk: 1, index_from: 0, index_to: -1, reason: 'WORKER_FAILED' } });
   const detail = await f.request(`GET ${f.campaignPath}`);
   assert.deepEqual(detail.json.review_recipients, []);
-  assert.match(detail.json.athena_query, /postline_events\.ses_events/);
+  assert.match(detail.json.athena_query, /ht2_events\.ses_events/);
   const result = await f.request(`POST ${f.campaignPath}/review`, { decision: 'SKIP', note: '全件の受付を証跡で確認' });
   assert.equal(result.statusCode, 200, result.body); assert.deepEqual(result.json.progress, { chunk: 1, index: 0 });
 });

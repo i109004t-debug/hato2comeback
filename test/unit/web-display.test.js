@@ -97,7 +97,7 @@ test('7.7 準備中は最初からやり直すか中止、スナップショッ�
   assert.deepEqual(reviewInput(preparing, 'RESTART', '送信前の異常を修正'), { decision: 'SKIP', note: '送信前の異常を修正', resume: false });
   assert.throws(() => reviewInput(preparing, 'RESEND', '確認済み'));
   assert.throws(() => reviewInput({ chunks_total: 1 }, 'RESTART', '確認済み'));
-  const recorded = { chunks_total: 1, review: { chunk: 0, index_from: 0, index_to: 0 }, review_recipients: ['member@example.jp'], athena_query: 'SELECT * FROM postline_events.ses_events' };
+  const recorded = { chunks_total: 1, review: { chunk: 0, index_from: 0, index_to: 0 }, review_recipients: ['member@example.jp'], athena_query: 'SELECT * FROM ht2_events.ses_events' };
   assert.deepEqual(reviewInput(recorded, 'SKIP', '配送の記録で確認'), { decision: 'SKIP', note: '配送の記録で確認' });
   assert.throws(() => reviewInput({ chunks_total: 1 }, 'RESEND', '確認済み'));
   assert.deepEqual(reviewInput({ chunks_total: 1 }, 'CANCEL', '確認不能のため中止'), { decision: 'CANCEL', note: '確認不能のため中止' });

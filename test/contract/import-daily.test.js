@@ -272,8 +272,8 @@ test('13.4 保存済みジョブIDがあれば日次で記録を補い、別ジ�
 
 test('13.4 一年以上の終了配信は本文・旧版テンプレートを消し、件数を保持', async () => {
   const f = managementFixture();
-  f.setCampaign({ status: 'COMPLETED', rev: 2, completed_at: new Date(f.deps.now() - 366 * 86400000).toISOString(), subject: '古い件名', body_text: '古い本文', footer_text: '古い法定表示', counts: { accepted: 10 }, template_name: `pl-c-${ID}-2` });
-  f.templates.set(`pl-c-${ID}-1`, {}); f.templates.set(`pl-c-${ID}-2`, {});
+  f.setCampaign({ status: 'COMPLETED', rev: 2, completed_at: new Date(f.deps.now() - 366 * 86400000).toISOString(), subject: '古い件名', body_text: '古い本文', footer_text: '古い法定表示', counts: { accepted: 10 }, template_name: `ht2-c-${ID}-2` });
+  f.templates.set(`ht2-c-${ID}-1`, {}); f.templates.set(`ht2-c-${ID}-2`, {});
   await f.worker({ mode: 'daily' });
   const campaign = f.getCampaign(); assert.equal(campaign.subject, undefined); assert.equal(campaign.body_text, undefined);
   assert.equal(campaign.content_erased, true); assert.equal(campaign.counts.accepted, 10); assert.equal(f.templates.size, 0);

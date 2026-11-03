@@ -11,5 +11,5 @@ aws stepfunctions describe-state-machine --region "$REGION" --state-machine-arn 
 aws sesv2 get-configuration-set-event-destinations --region "$REGION" --configuration-set-name "$(output ConfigurationSetName)" --query 'EventDestinations[].{Name:Name,Enabled:Enabled,Events:MatchingEventTypes}'
 sleep 1.1
 aws sesv2 get-contact-list --region "$REGION" --contact-list-name "$(output ContactListName)" --query 'Topics[].{Name:TopicName,Default:DefaultSubscriptionStatus}'
-aws cloudwatch describe-alarms --region "$REGION" --alarm-name-prefix "postline-$ENV-" --query 'MetricAlarms[].{Name:AlarmName,State:StateValue}'
+aws cloudwatch describe-alarms --region "$REGION" --alarm-name-prefix "ht2-$ENV-" --query 'MetricAlarms[].{Name:AlarmName,State:StateValue}'
 printf 'Read-only service checks completed. Browser HTTPS/login, unauthenticated/direct-origin rejection and real delivery must be checked separately (T-25..T-51).\n'

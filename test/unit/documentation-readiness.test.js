@@ -39,7 +39,7 @@ test('the user-guide CSV example passes the actual import validator', () => {
 });
 
 test('the documented T-33 local commands produce importable batches and preserve safety settings', () => {
-  const workspace = mkdtempSync(join(tmpdir(), 'postline-docs-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'ht2-docs-'));
   try {
     mkdirSync(join(workspace, 'build'));
     const original = { ...configDefaults('stg'), daily_send_cap: 4321, max_rate_per_sec: 3, sending_enabled: false };
@@ -69,7 +69,7 @@ test('the documented T-33 local commands produce importable batches and preserve
 });
 
 test('the documented restore verification rejects an incomplete or mismatched snapshot', () => {
-  const workspace = mkdtempSync(join(tmpdir(), 'postline-docs-restore-'));
+  const workspace = mkdtempSync(join(tmpdir(), 'ht2-docs-restore-'));
   try {
     const directory = join(workspace, 'build/restore-prod-2026-12-01');
     mkdirSync(directory, { recursive: true });

@@ -20,7 +20,7 @@ export function createMetrics({ env, now = defaultNow, write = (line) => process
       if (dimensions.Reason && !reasons.includes(dimensions.Reason)) throw new TypeError('Invalid pause reason');
       if (dimensions.Route && dimensions.Route !== '$default' && !API_ROUTES.some((route) => dimensions.Route === route.operation || dimensions.Route === route.id)) throw new TypeError('Invalid route dimension');
       const entry = {
-        _aws: { Timestamp: now(), CloudWatchMetrics: [{ Namespace: `Postline/${env}`, Dimensions: [fields], Metrics: [{ Name: name, Unit: METRIC_UNITS[name] }] }] },
+        _aws: { Timestamp: now(), CloudWatchMetrics: [{ Namespace: `HT2/${env}`, Dimensions: [fields], Metrics: [{ Name: name, Unit: METRIC_UNITS[name] }] }] },
         ...dimensions,
         [name]: value,
       };

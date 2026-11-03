@@ -29,11 +29,11 @@
   },
   {
     "ParameterKey": "CognitoDomainPrefix",
-    "ParameterValue": "postline-example-prod"
+    "ParameterValue": "ht2-example-prod"
   },
   {
     "ParameterKey": "AlertEmail",
-    "ParameterValue": "postline-prod@example.jp"
+    "ParameterValue": "ht2-prod@example.jp"
   },
   {
     "ParameterKey": "OriginSecretStage",
