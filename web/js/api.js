@@ -1,4 +1,5 @@
 export const ERROR_MESSAGES = Object.freeze({
+  EVIDENCE_TOO_LARGE: '証跡のファイルは1MiB以下にしてください。',
   SELF_CHANGE_FORBIDDEN: '自分自身のアカウントは変更できません。別の管理者に依頼してください。',
   LAST_ADMIN: '有効な管理者を0人にはできません。1人になる変更は警告の確認が必要です。一覧を読み直して確認してください。',
   REAUTH_REQUIRED: 'スタッフを変更するには、ログアウトしてからログインし直してください。',

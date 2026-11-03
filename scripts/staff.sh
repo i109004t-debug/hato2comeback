@@ -10,9 +10,9 @@ case "$action" in
     email=${3:?email required}
     name=${4:?name required}
     [[ $email =~ ^[A-Za-z0-9._+%-]+@[A-Za-z0-9.-]+$ && -n $name && $name != *$'\r'* && $name != *$'\n'* && $name != *'"'* && $name != *'\'* ]] || die 'Invalid email/name'
-    wait_input "Create an administrator in $ENV? Type: create-admin $HT2_ACCOUNT_ID" "create-admin $HT2_ACCOUNT_ID"
+    wait_input "Confirm the person's email address before creating an administrator in $ENV. Type: create-admin $HT2_ACCOUNT_ID" "create-admin $HT2_ACCOUNT_ID"
     username=$(aws_text cognito-idp admin-create-user --region "$REGION" --user-pool-id "$pool" --username "$email" \
-      --user-attributes "Name=email,Value=\"$email\"" "Name=name,Value=\"$name\"" --desired-delivery-mediums EMAIL \
+      --user-attributes "Name=email,Value=\"$email\"" 'Name=email_verified,Value=true' "Name=name,Value=\"$name\"" --desired-delivery-mediums EMAIL \
       --query User.Username --output text)
     [[ $username =~ ^[A-Za-z0-9_-]+$ ]] || die 'Unsafe username returned; inspect Cognito before retrying'
     aws cognito-idp admin-add-user-to-group --region "$REGION" --user-pool-id "$pool" --username "$username" --group-name admin

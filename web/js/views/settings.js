@@ -114,7 +114,8 @@ export async function mount(ctx) {
     const file = form.elements.file.files[0];
     const case_id = form.elements.case_id.value;
     perform(async () => {
-      if (!file || !file.size || file.size > 1024 * 1024) throw new ApiError('PAYLOAD_TOO_LARGE');
+      if (!file || !file.size) throw new ApiError('INVALID_REQUEST');
+      if (file.size > 1024 * 1024) throw new ApiError('EVIDENCE_TOO_LARGE');
       const bytes = new Uint8Array(await file.arrayBuffer());
       let binary = '';
       for (let offset = 0; offset < bytes.length; offset += 8192) binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));

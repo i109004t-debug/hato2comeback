@@ -1,22 +1,19 @@
 import { createExpressions, unmarshall } from '../../common/ddb.js';
-import { allRecords, updateRecord, contactPages, timestamp, objectText } from '../../common/records.js';
+import { allRecords, updateRecord, timestamp, objectText } from '../../common/records.js';
 import { AppError, invalid } from '../../common/http.js';
 import { isIsoDateTime } from '../../common/validate.js';
 import { assertSupportedSchema } from '../../common/schema.js';
-import { auditArchiveKey, readAuditArchive } from '../../common/audit-archive.js';
-import { objectPages, deleteDeliveryIndex } from '../../common/storage.js';
-import { contactIdentity, eraseContactMetadata } from '../../common/contact-metadata.js';
-import { eraseMatch } from '../../common/erase.js';
+import { readRecoveryAudit, replayContactAudit, addErased, recoveryRedo } from '../../common/recovery-audit.js';
 import { jstDate } from '../../common/time.js';
 
 const terminal = (item) => ['COMPLETED', 'CANCELLED'].includes(item.status);
 const active = ['SCHEDULED', 'QUEUED', 'SENDING', 'PAUSED'];
 const startActions = new Set(['CAMPAIGNS_START', 'CAMPAIGNS_RESUME', 'CAMPAIGNS_REVIEW', 'RESUME', 'REVIEW_DECISION']);
-const redoActions = new Set(['RECONSENT', 'CONTACTS_RECONSENT', 'SETTINGS_UPDATE']);
 
 function point(event, runtime) {
-  if (!isIsoDateTime(event.restore_point) || Date.parse(event.restore_point) > runtime.now()) throw invalid('restore_point');
-  return new Date(event.restore_point).toISOString();
+  const value = typeof event.restore_point === 'string' ? event.restore_point.replace(/\.(\d{3})\d+(?=Z|[+-]\d{2}:\d{2}$)/, '.$1') : event.restore_point;
+  if (!isIsoDateTime(value) || Date.parse(value) > runtime.now()) throw invalid('restore_point');
+  return new Date(value).toISOString();
 }
 
 async function stopped(runtime) {
@@ -39,87 +36,10 @@ async function* sourceRows(runtime, table) {
   } while (cursor && Object.keys(cursor).length);
 }
 
-async function archive(runtime, restorePoint, until) {
-  const items = [];
-  // 保管庫のaudit/だけを読み、内容のハッシュとキーの対応も検証する。
-  for (let day = Date.parse(restorePoint.slice(0, 10)); day <= Date.parse(until.slice(0, 10)); day += 86400000) {
-    const prefix = `audit/${new Date(day).toISOString().slice(0, 10).replaceAll('-', '/')}/`;
-    for await (const page of objectPages(runtime, runtime.auditArchiveBucket, prefix)) {
-      for (const { Key } of page) {
-        const match = /^audit\/\d{4}\/\d{2}\/\d{2}\/([^/]+)\/([^/]+)\.json$/.exec(Key ?? '');
-        if (!match || !Key.startsWith(prefix)) throw new Error('Invalid audit key');
-        const PK = decodeURIComponent(match[1]);
-        const SK = decodeURIComponent(match[2]);
-        const identity = { PK, SK, ts: SK.split('#')[0] };
-        if (auditArchiveKey(identity) !== Key) throw new Error('Audit key mismatch');
-        const item = await readAuditArchive(runtime, identity);
-        if (item.ts > restorePoint && item.ts <= until) items.push(item);
-      }
-    }
-  }
-  return items.sort((a, b) => a.SK.localeCompare(b.SK));
-}
-
 async function replace(runtime, item, current) {
   const expressions = createExpressions();
   const condition = current ? Number.isSafeInteger(current.version) ? expressions.equals('version', current.version) : `attribute_exists(PK) AND ${expressions.notExists('version')}` : 'attribute_not_exists(PK)';
   await runtime.store.put({ ...item, version: (current?.version ?? 0) + 1, updated_at: timestamp(runtime) }, condition, expressions.attributes());
-}
-
-async function addErased(runtime, addrId, mac, at) {
-  if (!/^[a-f0-9]{64}$/.test(mac ?? '') || addrId !== undefined && !/^[a-f0-9]{64}$/.test(addrId)) throw new Error('Invalid erase audit');
-  if (!await runtime.store.get('ERASED', mac)) {
-    try { await runtime.store.put({ PK: 'ERASED', SK: mac, ...(addrId ? { addr_id: addrId } : {}), erased_at: at }); } catch (error) {
-      if (error.name !== 'ConditionalCheckFailedException') throw error;
-    }
-  }
-}
-
-async function replay(runtime, items) {
-  let stops = 0;
-  let erasures = 0;
-  const erased = new Set();
-  for (const item of items) {
-    if (!['CONTACT_STOP', 'ERASE'].includes(item.action)) continue;
-    if (!/^[a-f0-9]{64}$/.test(item.addr_id ?? '') || !item.details?.operation || !/^(?:ALL|[a-z0-9_]{1,20})$/.test(item.details.scope ?? '')) throw new Error('Incomplete restore audit');
-    const current = await runtime.store.get('CONTACT_META', item.addr_id);
-    if (item.action === 'ERASE') {
-      await addErased(runtime, item.addr_id, item.details.erase_mac, item.ts);
-      const fields = { erased: true, blocked_all: true, blocked_topics: [] };
-      if (!current?.erased || current.attributes || current.pending_attributes) await updateRecord(runtime, 'CONTACT_META', item.addr_id, current, fields, current ? ['attributes', 'pending_attributes'] : []);
-      await deleteDeliveryIndex(runtime, item.addr_id);
-      erased.add(item.addr_id);
-      erasures += 1;
-    } else {
-      const topics = [...new Set([...(current?.blocked_topics ?? []), ...(item.details.scope === 'ALL' ? [] : [item.details.scope])])].sort();
-      const all = current?.blocked_all === true || item.details.scope === 'ALL';
-      const attributes = { ...(current?.attributes ?? {}) };
-      if (all) delete attributes.name;
-      if (!current || all !== current.blocked_all || JSON.stringify(topics) !== JSON.stringify(current.blocked_topics) || JSON.stringify(attributes) !== JSON.stringify(current.attributes)) {
-        await updateRecord(runtime, 'CONTACT_META', item.addr_id, current, { blocked_all: all, blocked_topics: topics, ...(!current?.erased ? { attributes } : {}) });
-      }
-      stops += 1;
-    }
-  }
-  if (erased.size) {
-    const targets = [];
-    for await (const contacts of contactPages(runtime)) {
-      for (const contact of contacts) {
-        const { addr_id: id } = await contactIdentity(runtime, contact.EmailAddress);
-        if (!erased.has(id)) continue;
-        targets.push(contact.EmailAddress);
-      }
-    }
-    // ページを読み終えてから消し、削除で一覧の続きが変わる影響を避ける。
-    for (const email of targets) {
-      // 照合値が現在の鍵でも一致することを確かめてSESの連絡先を消す。
-      if (!await runtime.store.get('ERASED', await eraseMatch(runtime, email))) throw new Error('Erase audit mismatch');
-      await eraseContactMetadata(runtime, email);
-      try { await runtime.ses.deleteContact({ ContactListName: runtime.contactList, EmailAddress: email }); } catch (error) { if (error.name !== 'NotFoundException') throw error; }
-      try { await runtime.ses.deleteSuppressedDestination({ EmailAddress: email }); } catch (error) { if (error.name !== 'NotFoundException') { await runtime.notify('ERASE_SUPPRESSION_FAILED', 'contact'); throw error; } }
-    }
-  }
-  return { stops, erasures };
 }
 
 async function authCheck(runtime) {
@@ -141,7 +61,7 @@ export async function restoreApply(event, runtime) {
   if (previous && (previous.restore_point !== restorePoint || JSON.stringify(previous.types) !== JSON.stringify(types))) throw new AppError('STATE_CONFLICT', 409, '同じ復元IDの入力が異なります。');
   if (previous?.applied) return { status: 'APPLIED', restore_id: restoreId };
   const until = previous?.until ?? timestamp(runtime);
-  const audits = await archive(runtime, restorePoint, until);
+  const audits = await readRecoveryAudit(runtime, restorePoint, until);
   const rows = [];
   for await (const item of sourceRows(runtime, event.source_table)) rows.push(item);
   if (types.includes('CONTACT_META')) {
@@ -176,7 +96,7 @@ export async function restoreApply(event, runtime) {
       await replace(runtime, item, current);
     }
   }
-  await replay(runtime, audits);
+  await replayContactAudit(runtime, audits);
   if (types.includes('SETTINGS/ORG')) await authCheck(runtime);
   state = await updateRecord(runtime, 'SETTINGS', stateKey, state, { applied: true, unidentified_erased: unidentified });
   return { status: 'APPLIED', restore_id: restoreId };
@@ -213,8 +133,8 @@ export async function restoreCheck(event, runtime) {
   if (state?.complete) return JSON.parse(await objectText(await runtime.s3.getObject({ Bucket: runtime.dataBucket, Key: key })));
   const until = state?.until ?? timestamp(runtime);
   state ??= await updateRecord(runtime, 'SETTINGS', `RESTORE_CHECK#${restoreId}`, undefined, { restore_point: restorePoint, until });
-  const audits = await archive(runtime, restorePoint, until);
-  const report = { restore_id: restoreId, restore_point: restorePoint, checked_at: until, campaigns: [], reapplied: {}, redo: audits.filter((item) => redoActions.has(item.action)).map(({ action, ts, target }) => ({ action, ts, target })), warnings: [] };
+  const audits = await readRecoveryAudit(runtime, restorePoint, until);
+  const report = { restore_id: restoreId, restore_point: restorePoint, checked_at: until, campaigns: [], reapplied: {}, redo: recoveryRedo(audits), warnings: [] };
   const list = await executions(runtime);
   const started = new Set(list.filter((item) => new Date(item.startDate).toISOString() > restorePoint).map(executionCampaign).filter(Boolean));
   for (const item of audits) if (startActions.has(item.action) && /^[0-9A-HJKMNP-TV-Z]{26}$/.test(item.target)) started.add(item.target);
@@ -254,7 +174,7 @@ export async function restoreCheck(event, runtime) {
     await updateRecord(runtime, 'CAMPAIGN', id, campaign, { status: 'NEEDS_REVIEW', review: { reason: 'RESTORED', restore_id: restoreId }, restore_check: change }, ['task_token']);
     report.campaigns = report.campaigns.filter((entry) => entry.campaign_id !== id).concat(change);
   }
-  report.reapplied = await replay(runtime, audits);
+  report.reapplied = await replayContactAudit(runtime, audits);
   const account = await runtime.ses.getAccount({});
   const sent = account.SendQuota?.SentLast24Hours;
   if (!Number.isFinite(sent) || sent < 0) throw new Error('Invalid SES quota');

@@ -95,7 +95,7 @@ async function backup(runtime) {
         const effective = applyContactMetadata(contact, saved);
         const complete = saved && saved.registration_state !== 'PENDING';
         if (!complete) missing += 1;
-        const row = { EmailAddress: effective.EmailAddress, TopicPreferences: effective.TopicPreferences ?? [], UnsubscribeAll: effective.UnsubscribeAll === true, LastUpdatedTimestamp: contact.LastUpdatedTimestamp ?? null, ...(complete ? { AttributesData: effective.AttributesData } : { HT2MetadataStatus: 'MISSING' }) };
+        const row = { EmailAddress: effective.EmailAddress, HT2AddrId: hash, TopicPreferences: effective.TopicPreferences ?? [], UnsubscribeAll: effective.UnsubscribeAll === true, LastUpdatedTimestamp: contact.LastUpdatedTimestamp ?? null, ...(complete ? { AttributesData: effective.AttributesData } : { HT2MetadataStatus: 'MISSING' }) };
         total += 1;
         const preferences = new Map(row.TopicPreferences.map((item) => [item.TopicName, item.SubscriptionStatus]));
         if (!row.UnsubscribeAll) for (const topic of topics) if ((preferences.get(topic.TopicName) ?? topic.DefaultSubscriptionStatus) === 'OPT_IN') counts[topic.TopicName] += 1;

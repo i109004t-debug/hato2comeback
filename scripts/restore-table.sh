@@ -6,7 +6,7 @@ check_stack
 [[ $# -le 2 ]] || die 'Usage: restore-table.sh ENV [RESTORE_POINT_ISO8601|latest]'
 point=${2:-latest}
 if [[ $point != latest ]]; then
-  [[ $point =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,3})?(Z|[+-][0-9]{2}:[0-9]{2})$ ]] || die 'Invalid restore point'
+  [[ $point =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$ ]] || die 'Invalid restore point'
   epoch=$(date -u -d "$point" +%s) || die 'Invalid restore point'
   [[ $epoch -le $(date -u +%s) ]] || die 'Restore point is in the future'
 fi
@@ -41,5 +41,6 @@ if [[ $point == latest ]]; then args+=(--use-latest-restorable-time); else args+
 aws_text dynamodb restore-table-to-point-in-time --region "$REGION" "${args[@]}" --output json > "build/$ENV.restore-table.json"
 aws_text dynamodb wait table-exists --region "$REGION" --table-name "$target"
 actual_point=$(aws_text dynamodb describe-table --region "$REGION" --table-name "$target" --query Table.RestoreSummary.RestoreDateTime --output text)
+actual_point=$(date -u -d "$actual_point" +%Y-%m-%dT%H:%M:%S.%3NZ) || die 'Invalid restored timestamp'
 printf 'Restored table: %s\nRestore ID: %s\nRestore point: %s\n' "$target" "$restore_id" "$actual_point"
 printf 'Keep both sending switches disabled. Invoke restore-apply with selected types, then restore-check using this restore_point. Review restore-reports/%s.json before enabling sending.\n' "$restore_id"

@@ -4,10 +4,12 @@ import { addressHash } from '../../common/log.js';
 import { normalizeEmail } from '../../common/email.js';
 import { AppError, invalid } from '../../common/http.js';
 import { contactAttributes } from '../../common/contact-metadata.js';
-import { isErased } from '../../common/erase.js';
+import { isErased, eraseMatch } from '../../common/erase.js';
 import { marshall, createExpressions, encodeCursor, decodeCursor } from '../../common/ddb.js';
 import { updateRecord, timestamp, objectText } from '../../common/records.js';
 import { jstDate } from '../../common/time.js';
+import { readRecoveryAudit, replayContactAudit, recoveryRedo } from '../../common/recovery-audit.js';
+import { isIsoDateTime } from '../../common/validate.js';
 
 const digest = (key) => createHash('sha256').update(key).digest('hex');
 const missing = () => new AppError('BACKUP_ATTRIBUTES_MISSING', 503, '属性と停止状態を復元できません。');
@@ -73,7 +75,7 @@ async function backupRows(runtime, requestedDate) {
   }
   const prefix = `backups/contacts/${date}`;
   const manifest = JSON.parse(await objectText(await runtime.s3.getObject({ Bucket: runtime.dataBucket, Key: `${prefix}.manifest.json` })));
-  if (manifest.complete !== true || !/^[a-f0-9]{64}$/.test(manifest.sha256 ?? '')) throw missing();
+  if (manifest.complete !== true || !/^[a-f0-9]{64}$/.test(manifest.sha256 ?? '') || !isIsoDateTime(manifest.backed_up_at) || Date.parse(manifest.backed_up_at) > runtime.now()) throw missing();
   const response = await runtime.s3.getObject({ Bucket: runtime.dataBucket, Key: `${prefix}.jsonl.gz` });
   let body;
   if (response.Body instanceof Uint8Array) body = Buffer.from(response.Body);
@@ -86,7 +88,46 @@ async function backupRows(runtime, requestedDate) {
   if (digest(body) !== manifest.sha256) throw missing();
   const rows = gunzipSync(body).toString('utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line));
   if (rows.length !== manifest.total) throw missing();
-  return { date, sha256: manifest.sha256, rows };
+  return { date, sha256: manifest.sha256, at: new Date(manifest.backed_up_at).toISOString(), rows };
+}
+
+async function replayBackup(runtime, secret, backup, until) {
+  const audits = await readRecoveryAudit(runtime, backup.at, until);
+  const identities = new Map();
+  const macs = new Map();
+  for (const contact of backup.rows) {
+    const email = normalizeEmail(contact.EmailAddress).email;
+    const id = addressHash(email, secret.key);
+    identities.set(id, id);
+    if (contact.HT2AddrId) {
+      if (!/^[a-f0-9]{64}$/.test(contact.HT2AddrId)) throw missing();
+      if (identities.has(contact.HT2AddrId) && identities.get(contact.HT2AddrId) !== id) throw missing();
+      identities.set(contact.HT2AddrId, id);
+    }
+    if (secret.previous) identities.set(addressHash(email, secret.previous.key), id);
+    macs.set(await eraseMatch(runtime, email), id);
+  }
+  let unidentified = false;
+  const reapplied = await replayContactAudit(runtime, audits, { contactFields: { kid: secret.kid }, resolveAddrId(item) {
+    const id = identities.get(item.addr_id) ?? (item.action === 'ERASE' ? macs.get(item.details.erase_mac) : undefined);
+    if (!id && item.action === 'CONTACT_STOP') unidentified = true;
+    return id;
+  } });
+  // 古いバックアップに識別子がなく旧鍵も失った場合は、停止を取りこぼさない。
+  if (unidentified) for await (const page of runtime.store.queryPages({ KeyConditionExpression: 'PK = :pk', ExpressionAttributeValues: { ':pk': { S: 'CONTACT_META' } }, ConsistentRead: true })) {
+    for (const item of page.items) {
+      if (item.kid !== secret.kid || item.erased) continue;
+      const attributes = { ...(item.attributes ?? {}) };
+      delete attributes.name;
+      await updateRecord(runtime, 'CONTACT_META', item.SK, item, { blocked_all: true, attributes }, ['pending_attributes']);
+    }
+  }
+  return { reapplied, redo: recoveryRedo(audits), warnings: unidentified ? ['UNIDENTIFIED_STOPS_ALL_BLOCKED'] : [] };
+}
+
+async function recoveryReport(runtime, state) {
+  if (!state.recovery_report_key) return {};
+  return JSON.parse(await objectText(await runtime.s3.getObject({ Bucket: runtime.dataBucket, Key: state.recovery_report_key })));
 }
 
 export async function rekeyContacts(event, runtime, context = {}) {
@@ -97,8 +138,9 @@ export async function rekeyContacts(event, runtime, context = {}) {
   if (state?.kid === secret.kid && state.complete) {
     if (state.key_hash !== digest(secret.key)) throw new AppError('STATE_CONFLICT', 409, '同じkidで鍵を変更しないでください。');
     if (state.running_until_ms > runtime.now()) throw new AppError('CONTACT_IMPORT_IN_PROGRESS', 409, '鍵の入れ替えを処理中です。');
+    const report = state.source === 'BACKUP' ? await recoveryReport(runtime, state) : {};
     if ((await runtime.contactLock.get())?.owner === owner) await runtime.contactLock.change(owner, {}, true);
-    return { status: 'DONE', saved: 0, examined: 0 };
+    return { status: 'DONE', saved: 0, examined: 0, ...report };
   }
   if ((await runtime.config.get()).sending_enabled !== false) throw new AppError('STATE_CONFLICT', 409, '全体の停止スイッチを切ってください。');
   // 中断後の再開は、同じ鍵・入力だけを受け付ける。
@@ -108,7 +150,7 @@ export async function rekeyContacts(event, runtime, context = {}) {
   if (lock?.owner !== owner) await runtime.contactLock.acquire(owner);
   const run = context.awsRequestId ?? randomUUID();
   state = await updateRecord(runtime, 'SETTINGS', 'REKEY', state, {
-    ...(!state || state.complete ? { kid: secret.kid, key_hash: digest(secret.key), previous_key_hash: secret.previous ? digest(secret.previous.key) : '', source: event.source, backup_date: event.backup_date ?? '', backup_sha256: '', cursor: '', cleanup_cursor: '', index: 0, phase: 'COPY', complete: false, started_at: timestamp(runtime) } : {}),
+    ...(!state || state.complete ? { kid: secret.kid, key_hash: digest(secret.key), previous_key_hash: secret.previous ? digest(secret.previous.key) : '', source: event.source, backup_date: event.backup_date ?? '', backup_sha256: '', backup_at: '', replay_until: '', recovery_report_key: '', cursor: '', cleanup_cursor: '', index: 0, phase: 'COPY', complete: false, started_at: timestamp(runtime) } : {}),
     previous_key_hash: secret.previous ? digest(secret.previous.key) : '', run, running_until_ms: runtime.now() + 900000, status: 'RUNNING', error_code: '',
   });
   let saved = 0;
@@ -118,10 +160,10 @@ export async function rekeyContacts(event, runtime, context = {}) {
   try {
     if (event.source === 'SES' && !secret.previous) throw new AppError('CONFIGURATION_INVALID', 503, 'SESからの鍵の入れ替えにはpreviousが必要です。');
     let backup;
-    if (event.source === 'BACKUP' && state.phase === 'COPY') {
+    if (event.source === 'BACKUP') {
       backup = await backupRows(runtime, state.backup_date || undefined);
-      if (state.backup_sha256 && state.backup_sha256 !== backup.sha256) throw missing();
-      state = await updateRecord(runtime, 'SETTINGS', 'REKEY', state, { backup_date: backup.date, backup_sha256: backup.sha256 });
+      if (state.backup_sha256 && (state.backup_sha256 !== backup.sha256 || state.backup_at !== backup.at)) throw missing();
+      state = await updateRecord(runtime, 'SETTINGS', 'REKEY', state, { backup_date: backup.date, backup_sha256: backup.sha256, backup_at: backup.at });
     }
     while (state.phase === 'COPY' && available()) {
       const page = event.source === 'SES' ? await runtime.ses.listContacts({ ContactListName: runtime.contactList, PageSize: 1000, ...(state.cursor ? { NextToken: state.cursor } : {}) }) : { Contacts: backup.rows };
@@ -139,7 +181,14 @@ export async function rekeyContacts(event, runtime, context = {}) {
       }
       if (index < page.Contacts.length) break;
       if (page.NextToken && page.NextToken === state.cursor) throw missing();
-      state = await updateRecord(runtime, 'SETTINGS', 'REKEY', state, { cursor: page.NextToken ?? '', index: 0, phase: page.NextToken ? 'COPY' : 'CLEANUP' });
+      state = await updateRecord(runtime, 'SETTINGS', 'REKEY', state, { cursor: page.NextToken ?? '', index: 0, phase: page.NextToken ? 'COPY' : event.source === 'BACKUP' ? 'REPLAY' : 'CLEANUP' });
+    }
+    if (state.phase === 'REPLAY' && available()) {
+      if (!state.replay_until) state = await updateRecord(runtime, 'SETTINGS', 'REKEY', state, { replay_until: timestamp(runtime) });
+      const report = await replayBackup(runtime, secret, backup, state.replay_until);
+      const key = `restore-reports/rekey-${secret.kid}.json`;
+      await runtime.s3.putObject({ Bucket: runtime.dataBucket, Key: key, ContentType: 'application/json', Body: JSON.stringify(report) });
+      state = await updateRecord(runtime, 'SETTINGS', 'REKEY', state, { recovery_report_key: key, phase: 'CLEANUP' });
     }
     if (state.phase === 'CLEANUP') {
       const ExclusiveStartKey = state.cleanup_cursor ? decodeCursor(state.cleanup_cursor, 'CONTACT_META') : undefined;
@@ -159,11 +208,12 @@ export async function rekeyContacts(event, runtime, context = {}) {
       if (available()) state = await updateRecord(runtime, 'SETTINGS', 'REKEY', state, { complete: true, completed_at: timestamp(runtime) });
     }
     state = await updateRecord(runtime, 'SETTINGS', 'REKEY', state, { running_until_ms: 0, status: state.complete ? 'DONE' : 'MORE', saved_at: timestamp(runtime) });
+    const report = event.source === 'BACKUP' ? await recoveryReport(runtime, state) : {};
     if (state.complete) {
       await runtime.record('contacts', 'REKEY', 'DONE');
       await runtime.contactLock.change(owner, {}, true);
     }
-    return { status: state.complete ? 'DONE' : 'MORE', saved, examined };
+    return { status: state.complete ? 'DONE' : 'MORE', saved, examined, ...report };
   } catch (error) {
     const code = error instanceof AppError ? error.code : error.name === 'TransactionCanceledException' ? 'STATE_CONFLICT' : 'INTERNAL';
     // 失敗・途中では連絡先の排他を残し、同じ入力で再開できる。

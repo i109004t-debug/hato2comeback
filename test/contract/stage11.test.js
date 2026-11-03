@@ -255,7 +255,7 @@ test('T-66 設定変更・DNS変更後は確定不可で、FAILは一般配信�
 
 test('API-28 証跡は復号後1MiBまで、壊れたBase64・空・期限切れ・他検査を拒否する', async () => {
   assert.equal(evidenceBytes(Buffer.alloc(1024 * 1024).toString('base64')).length, 1024 * 1024);
-  assert.throws(() => evidenceBytes(Buffer.alloc(1024 * 1024 + 1).toString('base64')), { code: 'PAYLOAD_TOO_LARGE' });
+  assert.throws(() => evidenceBytes(Buffer.alloc(1024 * 1024 + 1).toString('base64')), { code: 'EVIDENCE_TOO_LARGE', status: 413, message: '証跡のファイルは1MiB以下にしてください。' });
   for (const text of ['', '@@@@', 'YQ', 'YR==']) assert.throws(() => evidenceBytes(text), { code: 'INVALID_REQUEST' });
   const f = managementFixture(); const check = await startCheck(f);
   f.advance(30 * DAY);

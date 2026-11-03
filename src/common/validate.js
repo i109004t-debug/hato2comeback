@@ -132,7 +132,7 @@ export const routeSchemas = Object.freeze({
   'delivery-check.get': empty,
   'delivery-check.start': empty,
   'delivery-check.case': record({ result: enumeration('PASS', 'FAIL', 'NA'), note }),
-  'delivery-check.evidence': record({ case_id: string(4, 4, { pattern: /^T-\d{2}$/ }), file_name: plainText(1, 255), content_base64: string(1, 1398104) }),
+  'delivery-check.evidence': record({ case_id: string(4, 4, { pattern: /^T-\d{2}$/ }), file_name: plainText(1, 255), content_base64: string(1, 2 * 1024 * 1024) }),
   'delivery-check.submit': record({ note }),
   'staff.list': empty,
   'staff.create': record({ email, name: plainText(1, 50), roles: array(enumeration('admin', 'sender', 'approver', 'viewer'), 1, 4) }),

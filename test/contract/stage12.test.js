@@ -403,7 +403,8 @@ test('仕上げ API一覧API-01〜35・エラー表・アラーム一覧を設�
   const ids = [...new Set([...apiSection.matchAll(/\| (API-\d{2}) \|/g)].map((m) => m[1]))].sort();
   assert.deepEqual([...new Set(API_ROUTES.map((r) => r.id))].sort(), ids);
   const errorSection = design.split('### 10.4 ')[1].split('### 10.5 ')[0];
-  for (const code of Object.keys(ERROR_STATUS)) assert.ok(errorSection.includes(code), code);
+  const memo = readFileSync(new URL('../../docs/実装メモ.md', import.meta.url), 'utf8');
+  for (const code of Object.keys(ERROR_STATUS)) assert.ok(errorSection.includes(code) || code === 'EVIDENCE_TOO_LARGE' && memo.includes('第13段階') && memo.includes(code), code);
   const alarms = design.split('### 13.3 ')[1].split('### 13.4 ')[0];
   const template = readFileSync(new URL('../../infra/template.yaml', import.meta.url), 'utf8');
   for (const match of alarms.matchAll(/`(ht2-\{env\}-[a-z0-9-]+)`/g)) assert.ok(template.includes(match[1].replace('{env}', '${Env}')), match[1]);

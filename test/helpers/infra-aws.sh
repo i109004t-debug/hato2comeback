@@ -17,9 +17,10 @@ mock_aws() {
       printf '  OtherResource:\n    Type: example\n'
       ;;
     'cloudformation list-stacks') printf '%s\n' "${MOCK_STATUS:-UPDATE_COMPLETE}" ;;
-    'cloudformation list-stack-resources') printf 'ht2-dev-api\tht2-dev-worker\tht2-dev-audit\n' ;;
+    'cloudformation list-stack-resources') printf 'ht2-dev-api\tht2-dev-worker\tht2-dev-audit\tht2-dev-events\n' ;;
     'cloudformation describe-stacks')
       case "$args" in
+        *RuntimeRefreshToken*) printf '%s\n' "${MOCK_RUNTIME_PARAMETER:-RuntimeRefreshToken}" ;;
         *StackStatus*) printf '%s\n' "${MOCK_STATUS:-UPDATE_COMPLETE}" ;;
         *"OutputKey=='Environment'"*) printf 'dev\n' ;;
         *"OutputKey=='AccountId'"*) printf '111111111111\n' ;;
@@ -56,7 +57,7 @@ mock_aws() {
     'stepfunctions stop-execution') [[ ${MOCK_STOP_ERROR:-0} == 0 ]] || return 254 ;;
     'dynamodb restore-table-to-point-in-time') [[ ${MOCK_RESTORE_ERROR:-0} == 0 ]] || return 254; printf '{}\n' ;;
     'dynamodb wait') [[ ${MOCK_RESTORE_WAIT_ERROR:-0} == 0 ]] || return 254 ;;
-    'dynamodb describe-table') printf '2026-11-03T09:00:00.000Z\n' ;;
+    'dynamodb describe-table') printf '%s\n' "${MOCK_RESTORE_POINT:-2026-11-03T09:00:00.000Z}" ;;
     'sesv2 get-account') [[ ${MOCK_ACCOUNT_ERROR:-0} == 0 ]] || return 254; printf '%s\n' "${MOCK_PRODUCTION:-True}" ;;
     'lambda invoke')
       local sdk_result=${MOCK_SDK_RESULT:-}

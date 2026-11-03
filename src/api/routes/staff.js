@@ -42,7 +42,7 @@ async function change(ctx) {
     await audit(`STAFF_${action.toUpperCase().replaceAll('-', '_')}`, target ? params.username : 'staff', { phase: 'REQUESTED', confirm_single_admin: body.confirm_single_admin === true, ...(body.roles ? { roles: body.roles } : {}) });
     mutated = true;
     if (action === 'create') {
-      const response = await runtime.cognito.adminCreateUser({ UserPoolId: runtime.userPoolId, Username: body.email, UserAttributes: [{ Name: 'email', Value: body.email }, { Name: 'name', Value: body.name }], DesiredDeliveryMediums: ['EMAIL'] });
+      const response = await runtime.cognito.adminCreateUser({ UserPoolId: runtime.userPoolId, Username: body.email, UserAttributes: [{ Name: 'email', Value: body.email }, { Name: 'email_verified', Value: 'true' }, { Name: 'name', Value: body.name }], DesiredDeliveryMediums: ['EMAIL'] });
       input = { UserPoolId: runtime.userPoolId, Username: response.User?.Username };
       if (!input.Username || input.Username.includes('@')) throw new Error('Invalid created username');
       for (const role of body.roles) await runtime.cognito.adminAddUserToGroup({ ...input, GroupName: role });

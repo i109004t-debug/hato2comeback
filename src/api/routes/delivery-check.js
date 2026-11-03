@@ -40,7 +40,7 @@ async function saveCase({ runtime, params, body }) {
 export function evidenceBytes(value) {
   if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) throw invalid('content_base64');
   const bytes = Buffer.from(value, 'base64');
-  if (bytes.length > 1024 * 1024) throw new AppError('PAYLOAD_TOO_LARGE', 413, '証跡は1MiB以下にしてください。');
+  if (bytes.length > 1024 * 1024) throw new AppError('EVIDENCE_TOO_LARGE', 413, '証跡のファイルは1MiB以下にしてください。');
   if (!bytes.length || bytes.toString('base64') !== value) throw invalid('content_base64');
   return bytes;
 }

@@ -93,6 +93,7 @@ export function createHandler(deps = {}) {
       if (!['GET'].includes(route.method) && !['contacts.get', 'campaigns.preview', 'campaigns.submit', 'campaigns.approve', 'campaigns.unknowns'].includes(route.operation)) await audit(route.operation.toUpperCase().replaceAll('.', '_'), params.id ?? params.importId ?? route.operation.split('.')[0]);
       return jsonResponse(value?.statusCode ?? 200, value?.data ?? value);
     } catch (error) {
+      if (route?.operation === 'delivery-check.evidence' && error instanceof AppError && error.code === 'PAYLOAD_TOO_LARGE') error = new AppError('EVIDENCE_TOO_LARGE', 413, '証跡のファイルは1MiB以下にしてください。');
       if (audit && route?.method !== 'GET') {
         try { await audit('API_REJECTED', route.id, { code: error.code ?? 'INTERNAL' }, undefined, 'FAIL'); } catch (auditError) { logger.error('Audit failed', { err: auditError }); }
       }

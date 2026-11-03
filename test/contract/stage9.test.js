@@ -265,7 +265,7 @@ function backup(f, rows) {
   const body = gzipSync(rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''));
   const sha256 = createHash('sha256').update(body).digest('hex');
   f.files.set('backups/contacts/2026-11-02.jsonl.gz', body);
-  f.files.set('backups/contacts/2026-11-02.manifest.json', JSON.stringify({ complete: true, total: rows.length, sha256 }));
+  f.files.set('backups/contacts/2026-11-02.manifest.json', JSON.stringify({ complete: true, total: rows.length, sha256, backed_up_at: '2026-11-02T03:00:00Z' }));
   f.ddb.set({ PK: 'SETTINGS', SK: 'CONTACT_BACKUP', complete: true, backed_up_at: '2026-11-02T03:00:00Z' });
 }
 

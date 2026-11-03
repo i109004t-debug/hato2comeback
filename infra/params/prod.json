@@ -4,6 +4,7 @@
   {"ParameterKey": "BackupRetentionDays", "ParameterValue": "90"},
   {"ParameterKey": "EventLogRetentionDays", "ParameterValue": "90"},
   {"ParameterKey": "RuntimeVersionArn", "ParameterValue": ""},
+  {"ParameterKey": "RuntimeRefreshToken", "ParameterValue": ""},
   {"ParameterKey": "AuditLockMode", "ParameterValue": "GOVERNANCE"},
   {"ParameterKey": "AuditLockDays", "ParameterValue": "400"},
   {

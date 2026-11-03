@@ -118,6 +118,15 @@ test('第9段階 15.5 全LambdaでFunctionUpdateを既定とし、ARN指定時�
   for (const fn of functions) assert.match(fn, /RuntimeManagementConfig: !If\n        - HasRuntimeVersion\n        - \{UpdateRuntimeOn: Manual, RuntimeVersionArn: !Ref RuntimeVersionArn\}\n        - \{UpdateRuntimeOn: FunctionUpdate\}/);
 });
 
+test('第13段階 全4関数にRuntimeRefreshTokenを渡し、空と英数字・ハイフン64文字だけを許す', () => {
+  const parameter = blocks(main, 'Parameters').RuntimeRefreshToken;
+  assert.match(parameter, /Type: String\n    Default: ''\n    MaxLength: 64/);
+  const pattern = new RegExp(`^(?:${/AllowedPattern: '([^']+)'/.exec(parameter)[1]})$`);
+  for (const value of ['', '20261201T0300Z', 'A-z09', 'a'.repeat(64)]) assert.equal(pattern.test(value), true);
+  for (const value of ['a'.repeat(65), 'abc_def', 'a b', '日本語', 'a\n']) assert.equal(pattern.test(value), false);
+  for (const name of ['ApiFunction', 'WorkerFunction', 'AuditFunction', 'EventsFunction']) assert.match(resources[name], /Environment:\n        Variables:\n          RUNTIME_REFRESH: !Ref RuntimeRefreshToken/);
+});
+
 test('12.1 主スタックとエッジに全必須リソースがある', () => {
   const expected = {
     WebBucket: 'S3::Bucket', DataBucket: 'S3::Bucket', EventLogBucket: 'S3::Bucket', Distribution: 'CloudFront::Distribution',
@@ -473,9 +482,9 @@ test('15.5 smokeは全関数の実行環境ARNとSDK版を保存し、前回と�
   const r = runScript('smoke.sh', ['dev'], { MOCK_SDK_RESULT: JSON.stringify(sdk), MOCK_RUNTIME_ARN: 'arn:aws:lambda:ap-northeast-1::runtime:123abc' });
   assert.equal(r.status, 0, r.stderr);
   const saved = JSON.parse(readFileSync(previous, 'utf8'));
-  assert.deepEqual(Object.keys(saved.runtime_versions).sort(), ['ht2-dev-api', 'ht2-dev-audit', 'ht2-dev-worker']);
+  assert.deepEqual(Object.keys(saved.runtime_versions).sort(), ['ht2-dev-api', 'ht2-dev-audit', 'ht2-dev-events', 'ht2-dev-worker']);
   assert.deepEqual(saved.sdk_check, sdk);
-  assert.equal((r.calls.match(/lambda get-function-configuration/g) ?? []).length, 3);
+  assert.equal((r.calls.match(/lambda get-function-configuration/g) ?? []).length, 4);
   const same = runScript('smoke.sh', ['dev'], { MOCK_SDK_RESULT: JSON.stringify(sdk), MOCK_RUNTIME_ARN: 'arn:aws:lambda:ap-northeast-1::runtime:123abc' });
   assert.equal(same.status, 0, same.stderr); assert.doesNotMatch(same.stdout, /versions changed/);
   const changed = runScript('smoke.sh', ['dev'], { MOCK_SDK_RESULT: JSON.stringify({ ...sdk, packages: [{ ...sdk.packages[0], version: '3.2.0' }] }), MOCK_RUNTIME_ARN: 'arn:aws:lambda:ap-northeast-1::runtime:abcdef' });
@@ -857,6 +866,72 @@ function runEnvironment(code) {
   assert.ifError(result.error);
   return result;
 }
+
+test('第13段階 deployの更新トークンは指定時だけUTC時刻、通常更新は前回値、初回は空', () => {
+  for (const [args, env, expected] of [
+    [['dev', 'prepare', 'runtime-refresh', '--refresh-runtime'], {}, 'time'],
+    [['dev', 'prepare', '--refresh-runtime', 'runtime-refresh'], {}, 'time'],
+    [['dev', 'prepare', 'runtime-retain'], {}, 'previous'],
+    [['dev', 'prepare', 'runtime-first-update'], { MOCK_RUNTIME_PARAMETER: 'None' }, 'empty'],
+    [['dev', 'prepare', 'runtime-initial'], { MOCK_STATUS: 'None' }, 'empty'],
+  ]) {
+    const result = runScript('deploy.sh', args, env);
+    assert.equal(result.status, 0, result.stderr);
+    const parameters = JSON.parse(read('build/dev.main.resolved.params.json'));
+    const token = parameters.filter((item) => item.ParameterKey === 'RuntimeRefreshToken');
+    assert.equal(token.length, 1);
+    if (expected === 'time') {
+      assert.match(token[0].ParameterValue, /^\d{8}T\d{6}Z$/);
+      assert.equal(token[0].UsePreviousValue, undefined);
+    } else assert.deepEqual(token[0], { ParameterKey: 'RuntimeRefreshToken', ...(expected === 'previous' ? { UsePreviousValue: true } : { ParameterValue: '' }) });
+    assert.doesNotMatch(result.calls, /execute-change-set|lambda update-function/);
+  }
+});
+
+test('第13段階 refresh-runtimeもprepareとexecuteで配信中なら止める', () => {
+  const env = { MOCK_CAMPAIGNS: '01K9542S00AAAAAAAAAAAAAAAA\tSENDING\tNone\n' };
+  const prepare = runScript('deploy.sh', ['dev', 'prepare', 'runtime-refresh', '--refresh-runtime'], env);
+  assert.notEqual(prepare.status, 0); assert.match(prepare.stderr, /DEPLOY_BLOCKED/);
+  assert.doesNotMatch(prepare.calls, /cloudformation (?:package|create-change-set)/);
+  const execute = runScript('deploy.sh', ['dev', 'execute', 'runtime-refresh'], env, 'execute ht2-main-dev runtime-refresh\n');
+  assert.notEqual(execute.status, 0); assert.match(execute.stderr, /DEPLOY_BLOCKED/);
+  assert.doesNotMatch(execute.calls, /execute-change-set/);
+  const changed = runScript('deploy.sh', ['dev', 'execute', 'runtime-refresh', '--refresh-runtime']);
+  assert.notEqual(changed.status, 0); assert.doesNotMatch(changed.calls, /execute-change-set/);
+});
+
+test('第13段階 SDK点検失敗は結果をfailed.jsonへ残し、前回の成功を保つ', () => {
+  const passed = runScript('smoke.sh', ['dev']);
+  assert.equal(passed.status, 0, passed.stderr);
+  const success = read('build/dev.sdk-check.json');
+  for (const env of [
+    { MOCK_SDK_RESULT: '{"ok":false,"packages":[{"ok":false}]}' },
+    { MOCK_FUNCTION_ERROR: 'Unhandled', MOCK_SDK_RESULT: '{"errorType":"Error"}' },
+    { MOCK_SDK_RESULT: 'invalid JSON' },
+  ]) {
+    const result = runScript('smoke.sh', ['dev'], env);
+    assert.notEqual(result.status, 0);
+    assert.equal(read('build/dev.sdk-check.failed.json').trim(), env.MOCK_SDK_RESULT);
+    assert.equal(read('build/dev.sdk-check.json'), success);
+    assert.equal(existsSync(new URL('build/dev.sdk-check.result.json', root)), false);
+    assert.equal(existsSync(new URL('build/dev.sdk-check.next.json', root)), false);
+    assert.equal((result.calls.match(/lambda invoke/g) ?? []).length, 1);
+  }
+});
+
+test('第13段階 restore-tableは6桁の時刻をミリ秒UTCで表示する', () => {
+  const result = runScript('restore-table.sh', ['dev', '2026-01-01T00:00:00.123456Z'], { MOCK_RESTORE_POINT: '2026-01-01T09:00:00.999999+09:00' }, 'restore 111111111111 dev\n');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Restore point: 2026-01-01T00:00:00.999Z/);
+  assert.match(result.calls, /--restore-date-time 2026-01-01T00:00:00.123456Z/);
+});
+
+test('第13段階 staff.shもemail_verified=trueを渡し、本人アドレス確認を求める', () => {
+  const result = runScript('staff.sh', ['dev', 'create-admin', 'admin@example.com', '管理者'], {}, 'create-admin 111111111111\n');
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.calls, /Name=email_verified,Value=true/);
+  assert.match(result.stdout + result.stderr, /Confirm the person's email address/);
+});
 
 test('第8段階17 env.shをsourceしてもシェルのオプション・作業場所を変更しない', () => {
   const result = runEnvironment(`before_options=$-; before_dir=$PWD; before_pipe=$(set -o | while read -r key value; do [[ $key != pipefail ]] || printf '%s' "$value"; done)

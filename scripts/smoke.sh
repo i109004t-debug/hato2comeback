@@ -7,7 +7,14 @@ mkdir -p build
 SDK_FILE="build/$ENV.sdk-check.json"
 SDK_RESULT_FILE="build/$ENV.sdk-check.result.json"
 SDK_NEXT="build/$ENV.sdk-check.next.json"
-trap 'rm -f -- "$SDK_RESULT_FILE" "$SDK_NEXT"' EXIT
+SDK_OK=false
+cleanup() {
+  if [[ $SDK_OK == false && -f $SDK_RESULT_FILE ]]; then
+    mv -f -- "$SDK_RESULT_FILE" "build/$ENV.sdk-check.failed.json"
+  fi
+  rm -f -- "$SDK_RESULT_FILE" "$SDK_NEXT"
+}
+trap cleanup EXIT
 SDK_ERROR=$(aws_text lambda invoke --region "$REGION" --function-name "$(output WorkerFunctionName)" \
   --invocation-type RequestResponse --cli-binary-format raw-in-base64-out --payload '{"mode":"sdk-check"}' \
   --query FunctionError --output text "$SDK_RESULT_FILE")
@@ -33,6 +40,7 @@ if [[ -f $SDK_FILE ]] && ! cmp -s -- "$SDK_FILE" "$SDK_NEXT"; then
   diff -u -- "$SDK_FILE" "$SDK_NEXT" || [[ $? == 1 ]]
 fi
 mv -f -- "$SDK_NEXT" "$SDK_FILE"
+SDK_OK=true
 DIST=$(output DistributionId); WEB=$(output WebBucketName)
 aws cloudfront get-distribution --region "$REGION" --id "$DIST" --query 'Distribution.Status' --output text
 aws s3api head-object --region "$REGION" --bucket "$WEB" --key config.json --query '{ContentType:ContentType,CacheControl:CacheControl}'

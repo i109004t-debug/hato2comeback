@@ -44,6 +44,11 @@ Parameters:
     Default: 7
     MinValue: 1
     MaxValue: 7
+  RuntimeRefreshToken:
+    Type: String
+    Default: ''
+    MaxLength: 64
+    AllowedPattern: '[A-Za-z0-9-]{0,64}'
   SnapshotRetentionDays:
     Type: Number
     Default: 30
@@ -321,6 +326,7 @@ Resources:
       Timeout: 29
       Environment:
         Variables:
+          RUNTIME_REFRESH: !Ref RuntimeRefreshToken
           TABLE_NAME: !Ref Table
   SesEventsRule:
     Type: AWS::Events::Rule
@@ -605,6 +611,7 @@ Resources:
       LoggingConfig: {LogFormat: JSON, LogGroup: !Ref ApiLogGroup}
       Environment:
         Variables:
+          RUNTIME_REFRESH: !Ref RuntimeRefreshToken
           ENV: !Ref Env
           TABLE_NAME: !Ref Table
           DATA_BUCKET: !Ref DataBucket
@@ -644,6 +651,7 @@ Resources:
       LoggingConfig: {LogFormat: JSON, LogGroup: !Ref WorkerLogGroup}
       Environment:
         Variables:
+          RUNTIME_REFRESH: !Ref RuntimeRefreshToken
           AUDIT_ARCHIVE_BUCKET: !Ref AuditArchiveBucket
           ENV: !Ref Env
           TABLE_NAME: !Ref Table
@@ -704,6 +712,7 @@ Resources:
       LoggingConfig: {LogFormat: JSON, LogGroup: !Ref AuditLogGroup}
       Environment:
         Variables:
+          RUNTIME_REFRESH: !Ref RuntimeRefreshToken
           ENV: !Ref Env
           AUDIT_ARCHIVE_BUCKET: !Ref AuditArchiveBucket
   AuditStreamMapping:

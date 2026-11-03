@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "${BASH_SOURCE[0]%/*}/common.sh"
-init_env "${1:?Usage: bash scripts/deploy.sh ENV prepare|execute [change-set-name]}"
+init_env "${1:?Usage: bash scripts/deploy.sh ENV prepare|execute [change-set-name] [--refresh-runtime]}"
 ACTION=${2:-prepare}
 PARAMS=${HT2_PARAMS:-build/$ENV.params.json}
 [[ -f $PARAMS ]] || die "Create $PARAMS from infra/params/$ENV.json and review its values"
-CHANGE_SET=${3:-ht2-$ENV-$EPOCHSECONDS}
+CHANGE_SET=''
+REFRESH_RUNTIME=false
+for arg in "${@:3}"; do
+  case "$arg" in
+    --refresh-runtime) REFRESH_RUNTIME=true ;;
+    --*) die "Unknown option: $arg" ;;
+    *) [[ -z $CHANGE_SET ]] || die 'Only one change set name is allowed'; CHANGE_SET=$arg ;;
+  esac
+done
+[[ $ACTION != execute || $REFRESH_RUNTIME == false ]] || die 'Use --refresh-runtime when preparing the change set'
+EXPLICIT_CHANGE_SET=$CHANGE_SET
+CHANGE_SET=${CHANGE_SET:-ht2-$ENV-$EPOCHSECONDS}
 [[ $CHANGE_SET =~ ^[A-Za-z][A-Za-z0-9-]{0,127}$ ]] || die 'Invalid change set name'
 preflight_deploy() {
   [[ $1 == UPDATE ]] || return 0
@@ -97,6 +108,28 @@ case "$ACTION" in
     PARAMETER_TEXT=${PARAMETER_TEXT//REPLACE_WITH_EDGE_WEB_ACL_ARN/$ACL}
     mkdir -p build
     PARAMS="build/$ENV.main.resolved.params.json"
+    REFRESH_TOKEN=''
+    if [[ $REFRESH_RUNTIME == true ]]; then REFRESH_TOKEN=$(date -u +%Y%m%dT%H%M%SZ); fi
+    if [[ -n $REFRESH_TOKEN || $TYPE == CREATE ]]; then
+      RUNTIME_PARAMETER="{\"ParameterKey\":\"RuntimeRefreshToken\",\"ParameterValue\":\"$REFRESH_TOKEN\"}"
+    else
+      previous_runtime=$(aws_text cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
+        --query "Stacks[0].Parameters[?ParameterKey=='RuntimeRefreshToken'].ParameterKey | [0]" --output text)
+      case "$previous_runtime" in
+        RuntimeRefreshToken) RUNTIME_PARAMETER='{"ParameterKey":"RuntimeRefreshToken","UsePreviousValue":true}' ;;
+        None) RUNTIME_PARAMETER='{"ParameterKey":"RuntimeRefreshToken","ParameterValue":""}' ;;
+        *) die 'Cannot verify the previous runtime refresh parameter' ;;
+      esac
+    fi
+    # パラメータは平坦なオブジェクトの配列。更新用の項目だけを置き換える。
+    runtime_pattern='\{[^{}]*"ParameterKey"[[:space:]]*:[[:space:]]*"RuntimeRefreshToken"[^{}]*\}'
+    if [[ $PARAMETER_TEXT =~ $runtime_pattern ]]; then
+      runtime_entry=${BASH_REMATCH[0]}
+      PARAMETER_TEXT=${PARAMETER_TEXT/"$runtime_entry"/"$RUNTIME_PARAMETER"}
+    else
+      [[ $PARAMETER_TEXT == *']'* ]] || die 'Invalid parameters JSON'
+      PARAMETER_TEXT="${PARAMETER_TEXT%]*},$RUNTIME_PARAMETER]"
+    fi
     printf '%s\n' "$PARAMETER_TEXT" > "$PARAMS"
     aws cloudformation package --region "$REGION" --template-file infra/template.yaml --s3-bucket "$ARTIFACT_BUCKET" \
       --s3-prefix "ht2/$ENV" --output-template-file build/template.out.yaml
@@ -111,7 +144,7 @@ case "$ACTION" in
     printf 'Stopped for review. Execute with: bash scripts/deploy.sh %s execute %s\n' "$ENV" "$CHANGE_SET"
     ;;
   execute)
-    [[ -n ${3:-} ]] || die 'An explicit reviewed change set name is required'
+    [[ -n $EXPLICIT_CHANGE_SET ]] || die 'An explicit reviewed change set name is required'
     status=$(aws_text cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text)
     TYPE=$(stack_type "$status")
     preflight_deploy "$TYPE"
